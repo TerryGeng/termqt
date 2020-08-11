@@ -8,7 +8,11 @@ from PyQt5.QtGui import QPainter, QColor, QPalette, QFontDatabase, QPen, \
     QFont, QFontInfo, QFontMetrics, QPixmap
 from PyQt5.QtCore import Qt, QTimer, QMutex
 
-from .colors import colors
+from .colors import colors8, colors16, colors256
+
+
+DEFAULT_FG_COLOR = Qt.white
+DEFAULT_BG_COLOR = Qt.black
 
 
 class ControlChar(Enum):
@@ -25,9 +29,12 @@ class ControlChar(Enum):
 
 class Char(NamedTuple):
     char: str
-    style = None
-    color = None
     cursor: bool = False
+    color: QColor = None
+    bg_color: QColor = None
+    bold: bool = False
+    underline: bool = False
+    reverse: bool = False
 
 
 class Position(NamedTuple):
@@ -83,6 +90,7 @@ class EscapeProcessor:
 
         self._cmd_func = {}
         self._cmd_func['n'] = self._cmd_n
+        self._cmd_func['m'] = self._cmd_m
         self._cmd_func['J'] = self._cmd_J
         self._cmd_func['H'] = self._cmd_H
         self._cmd_func['K'] = self._cmd_K
@@ -131,6 +139,15 @@ class EscapeProcessor:
         #  ret 0: ready
         #      3: malfunction
         self.report_device_status_cb = lambda: None
+
+        # Set Style
+        #  set the style for future characters
+        # ret: color, bgcolor, bold, underlined, reverse
+        #      color, bgcolor is QColor, None means unspecified,
+        #      the other three flags: -1 means unspecified,
+        #        0 means false, 1 means true
+        self.set_style_cb = lambda color, bgcolor, bold, \
+            underlined, reverse: None
 
     def input(self, c: int):
         # process input character c, c is the ASCII code of input.
@@ -257,19 +274,60 @@ class EscapeProcessor:
 
     def _cmd_A(self):
         # Cursor Up
-        self.set_cursor_rel_position_cb(0, -1)
+        self.set_cursor_rel_position_cb(0, -1 * self._get_args(0, default=1))
 
     def _cmd_B(self):
         # Cursor Down
-        self.set_cursor_rel_position_cb(0, +1)
+        self.set_cursor_rel_position_cb(0, +1 * self._get_args(0, default=1))
 
     def _cmd_C(self):
         # Cursor Right
-        self.set_cursor_rel_position_cb(-1, 0)
+        self.set_cursor_rel_position_cb(-1 * self._get_args(0, default=1), 0)
 
     def _cmd_D(self):
         # Cursor Left
-        self.set_cursor_rel_position_cb(+1, 0)
+        self.set_cursor_rel_position_cb(+1 * self._get_args(0, default=1), 0)
+
+    def _cmd_m(self):
+        # Colors and decorators
+        color = None
+        bg_color = None
+        bold, underline, reverse = -1, -1, -1
+
+        arg0 = self._get_args(0, default=0)
+        arg1 = self._get_args(1, default=0)
+        arg2 = self._get_args(2, default=0)
+
+        if arg0 == 0:
+            bold, underline, reverse = 0, 0, 0
+            color = DEFAULT_FG_COLOR
+            bg_color = DEFAULT_BG_COLOR
+        elif arg0 == 1:
+            bold = 1
+        elif arg0 == 4:
+            underline = 1
+        elif arg0 == 7:
+            reverse = 1
+
+        elif 30 <= arg0 <= 37:
+            if arg1 == 0:  # foreground 8 colors
+                color = colors8[arg0]
+            elif arg1 == 1:  # foreground 16 colors
+                color = colors16[arg0]
+
+        elif 40 <= arg0 <= 47:
+            if arg1 == 0:  # background 8 colors
+                bg_color = colors8[arg0 - 10]
+            elif arg1 == 1:  # background 16 colors
+                bg_color = colors16[arg0 - 10]
+
+        elif arg0 == 38 and arg1 == 5 and 0 <= arg2 <= 255:  # xterm 256 colors
+            color = colors256[arg2]
+
+        elif arg0 == 48 and arg1 == 5 and 0 <= arg2 <= 255:  # xterm 256 colors
+            bg_color = colors256[arg2]
+
+        self.set_style_cb(color, bg_color, bold, underline, reverse)
 
 
 class Terminal(QWidget):
@@ -302,6 +360,11 @@ class Terminal(QWidget):
         # initialize basic styling and geometry
         self.fg_color = None
         self.bg_color = None
+        # three terminal char styles
+        self.bold = False
+        self.underline = False
+        self.reverse = False
+
         self.font = None
         self.char_width = None
         self.char_height = None
@@ -310,8 +373,8 @@ class Terminal(QWidget):
         self.col_len = None
         self.dpr = self.devicePixelRatioF()
 
-        self.set_bg(Qt.black)
-        self.set_fg(Qt.white)
+        self.set_bg(DEFAULT_BG_COLOR)
+        self.set_fg(DEFAULT_FG_COLOR)
         self.set_font()
         self.setAutoFillBackground(True)
         self.setMinimumSize(width, height)
@@ -344,6 +407,8 @@ class Terminal(QWidget):
         ep.set_cursor_abs_position_cb = self.cb_set_cursor_abs_pos
         ep.set_cursor_rel_position_cb = self.cb_set_cursor_rel_pos
         ep.report_device_status_cb = lambda: self.stdin_callback("\x1b[0n")
+        ep.report_cursor_position_cb = self.cb_report_cursor_pos
+        ep.set_style_cb = self.cb_set_style
 
     def set_bg(self, color: QColor):
         self.bg_color = color
@@ -359,18 +424,22 @@ class Terminal(QWidget):
         self.setPalette(pal)
 
     def set_font(self, font: QFont = None):
+        qfd = QFontDatabase()
+
         if font:
             info = QFontInfo(font)
             if info.styleHint() != QFont.Monospace:
                 self.logger.warning("font: Please use monospaced font! "
                                     f"Unsupported font {info.family}.")
-                font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-                font.setPointSize(12)
+                font = qfd.systemFont(QFontDatabase.FixedFont)
+        elif "Menlo" in qfd.families():
+            font = QFont("Menlo")
+            info = QFontInfo(font)
         else:
-            font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-            font.setPointSize(12)
+            font = qfd.systemFont(QFontDatabase.FixedFont)
             info = QFontInfo(font)
 
+        font.setPointSize(12)
         self.font = font
         metrics = QFontMetrics(font)
         self.char_width = metrics.horizontalAdvance("A")
@@ -406,26 +475,41 @@ class Terminal(QWidget):
         if not self._buffer:
             return
 
-        qp.setPen(self.fg_color)
-        qp.setFont(self.font)
-
         cw = self.char_width
+        ch = self.char_height
         lh = self.line_height
+        ft = self.font
+        fg_color = self.fg_color
 
         ht = 0
 
         offset = self._buffer_display_offset
 
-        qp.fillRect(self.rect(), self.bg_color)
+        qp.fillRect(self.rect(), DEFAULT_BG_COLOR)
 
         for ln in range(self.col_len):
             row = self._buffer[ln + offset]
 
             ht += lh
             for cn, c in enumerate(row):
-                if c:
-                    qp.drawText(cn*cw, ht, c.char)
+                if c and not c.cursor:
+                    ft.setBold(c.bold)
+                    ft.setUnderline(c.underline)
+                    qp.setFont(ft)
+                    if not c.reverse:
+                        qp.fillRect(cn*cw, int(ht - 0.8*ch), cw, lh,
+                                    c.bg_color)
+                        qp.setPen(c.color)
+                        qp.drawText(cn*cw, ht, c.char)
+                    else:
+                        qp.fillRect(cn*cw, int(ht - 0.8*ch), cw, lh, c.color)
+                        qp.setPen(c.bg_color)
+                        qp.drawText(cn*cw, ht, c.char)
                 else:
+                    qp.setPen(fg_color)
+                    ft.setBold(False)
+                    ft.setUnderline(False)
+                    qp.setFont(ft)
                     qp.drawText(ht, cn*cw, " ")
 
         self._canvas_lock.unlock()
@@ -448,8 +532,8 @@ class Terminal(QWidget):
         ch = self.char_height
 
         qp = QPainter(self._canvas)
-        fg = self.fg_color
-        bg = self.bg_color
+        fg = DEFAULT_FG_COLOR
+        bg = DEFAULT_BG_COLOR
 
         if self._cursor_blinking_state == CursorState.UNFOCUSED:
             outline = QPen(fg)
@@ -482,6 +566,13 @@ class Terminal(QWidget):
         self._paint_buffer(False)
         self._paint_cursor()
 
+    def cb_set_style(self, color, bg_color, bold, underline, reverse):
+        self.fg_color = color if color else self.fg_color
+        self.bg_color = bg_color if bg_color else self.bg_color
+        self.bold = bool(bold) if bold != -1 else self.bold
+        self.underline = bool(underline) if underline != -1 else self.underline
+        self.reverse = bool(reverse) if reverse != -1 else self.reverse
+
     # ==========================
     #  SCREEN BUFFER FUNCTIONS
     # ==========================
@@ -490,6 +581,9 @@ class Terminal(QWidget):
         _new_buffer = deque([[None for x in range(self.row_len)]
                              for i in range(self.col_len)])
         _new_wrap = deque([False for i in range(self.col_len)])
+
+        self._buffer = _new_buffer
+        self._line_wrapped_flags = _new_wrap
 
     def resize(self, width, height):
         super().resize(width, height)
@@ -634,8 +728,14 @@ class Terminal(QWidget):
             old_cur_pos = self._cursor_position
             buf[old_cur_pos.y][old_cur_pos.x] = None
 
-        char_list = [Char(char=t) for t in text] \
-            + [Char(char=' ', cursor=True)]
+        color, bgcolor = self.fg_color, self.bg_color
+        bold, underline, reverse = self.bold, self.underline, self.reverse
+
+        # all chars + the cursor char
+        char_list = [Char(t, False, color, bgcolor,
+                          bold, underline, reverse) for t in text] \
+            + [Char(' ', True, color, bgcolor, bold, underline, reverse)]
+
         for i, t in enumerate(char_list):
             if t.char == '\n':
                 pos_x = 0
@@ -856,7 +956,7 @@ class Terminal(QWidget):
         if x < 0:
             x = 0
         elif x >= self.row_len:
-            x = self.row_len
+            x = self.row_len - 1
 
         return x, y
 
@@ -870,8 +970,8 @@ class Terminal(QWidget):
         self._cursor_position = Position(*self._keep_pos_in_screen(x, y))
 
     def cb_report_cursor_pos(self):
-        self.stdin_callback(f"\x1b[{self._cursor_position.x}"
-                            f"{self._cursor_position.y}")
+        self.stdin_callback(f"\x1b[{self._cursor_position.x + 1};"
+                            f"{self._cursor_position.y + 1}")
 
     # ==========================
     #      USER INPUT EVENT
