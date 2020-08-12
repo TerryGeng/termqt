@@ -6,7 +6,7 @@ from enum import Enum
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtGui import QPainter, QColor, QPalette, QFontDatabase, QPen, \
     QFont, QFontInfo, QFontMetrics, QPixmap
-from PyQt5.QtCore import Qt, QTimer, QMutex
+from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
 
 from .colors import colors8, colors16, colors256
 
@@ -60,23 +60,25 @@ class EscapeProcessor:
 
         WAIT_FOR_BRAC = 1
         # if receive a [, transfer to 2
-        # if receive a letter, save to cmd buffer, transfer to 4
+        # if receive a letter/digit, save to cmd buffer, transfer to 4
         # otherwise return to 0
 
-        WAIT_FOR_FIRST_ARG = 2
-        # if receives a number, append to arg1 buffer, stays at 2
-        # or after receive a colon, transfer to 3
-        # if receive a letter, save to cmd buffer, transfer to 4
+        WAIT_FOR_MARKS = 2
+        # if receive ?, =, <, >, #, save to marks, transfer to 3
+        # if receive a number, append to arg buf, transfer to 4
+        # if receive a letter, save to cmd buffer, transfer to 5
         # otherwise return to 0
 
-        WAIT_FOR_SECOND_ARG = 3
-        # if receives a number, append to arg2 buffer, stays at 3
-        # or after receive a colon, transfer to 4
+        WAIT_FOR_NEXT_ARG = 3
+        # if receives a number, append to arg buf, transfer to 4
         # if receive a letter, save to cmd buffer, transfer to 5
+        # otherwise return to 0
 
-        WAIT_FOR_THIRD_ARG = 4
-        # if receives a number, append to arg3 buffer, stays at 4
+        WAIT_FOR_ARG_FINISH = 4
+        # if receives a number, append to arg buf, stays at 4
+        # if receive a colon, append arg buf to arg list, transfer to 3
         # if receive a letter, save to cmd buffer, transfer to 5
+        # otherwise return to 0
 
         COMPLETE = 5
         # once entered, process the input and return to 0
@@ -84,7 +86,8 @@ class EscapeProcessor:
     def __init__(self, logger):
         self.logger = logger
         self._state = self.State.WAIT_FOR_ESC
-        self._args = [''] * 3
+        self._args = []
+        self._arg_buf = ""
         self._cmd = ""
         self._buffer = ""
 
@@ -149,6 +152,14 @@ class EscapeProcessor:
         self.set_style_cb = lambda color, bgcolor, bold, \
             underlined, reverse: None
 
+        # Save Cursor Position
+        #  save cursor positio and current style
+        self.save_cursor_cb = lambda: None
+
+        # Restore Cursor Position
+        #  restore cursor positio and current style
+        self.restore_cursor_cb = lambda: None
+
     def input(self, c: int):
         # process input character c, c is the ASCII code of input.
         #
@@ -169,7 +180,22 @@ class EscapeProcessor:
 
         elif self._state == self.State.WAIT_FOR_BRAC:
             if c == 91:  # ord('[')
-                self._enter_state(self.State.WAIT_FOR_FIRST_ARG)
+                self._enter_state(self.State.WAIT_FOR_MARKS)
+            elif 48 <= c <= 57 or \
+                    65 <= c <= 90 or 97 <= c <= 122:  # 0-9, A-Z, a-z
+                self._cmd = chr(c)
+                self._enter_state(self.State.COMPLETE)
+                return 1
+            else:
+                self.fail()
+
+        elif self._state == self.State.WAIT_FOR_MARKS:
+            if c in [ord('?'), ord('#'), ord('<'), ord('>'), ord('=')]:
+                self._mark = chr(c)
+                self._enter_state(self.State.WAIT_FOR_NEXT_ARG)
+            elif 48 <= c <= 57:  # digits, 0-9
+                self._arg_buf += chr(c)
+                self._enter_state(self.State.WAIT_FOR_ARG_FINISH)
             elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
                 self._cmd = chr(c)
                 self._enter_state(self.State.COMPLETE)
@@ -177,35 +203,26 @@ class EscapeProcessor:
             else:
                 self.fail()
 
-        elif self._state == self.State.WAIT_FOR_FIRST_ARG:
+        elif self._state == self.State.WAIT_FOR_NEXT_ARG:
             if 48 <= c <= 57:  # digits, 0-9
-                self._args[0] += chr(c)
+                self._arg_buf += chr(c)
+                self._enter_state(self.State.WAIT_FOR_ARG_FINISH)
+            elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
+                self._cmd = chr(c)
+                self._enter_state(self.State.COMPLETE)
+                return 1
+            else:
+                self.fail()
+
+        elif self._state == self.State.WAIT_FOR_ARG_FINISH:
+            if 48 <= c <= 57:  # digits, 0-9
+                self._arg_buf += chr(c)
             elif c == 59:  # ord(';')
-                self._enter_state(self.State.WAIT_FOR_SECOND_ARG)
-                return 1
+                self._args.append(int(self._arg_buf))
+                self._arg_buf = ""
+                self._enter_state(self.State.WAIT_FOR_NEXT_ARG)
             elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
-                self._cmd = chr(c)
-                self._enter_state(self.State.COMPLETE)
-                return 1
-            else:
-                self.fail()
-
-        elif self._state == self.State.WAIT_FOR_SECOND_ARG:
-            if 48 <= c <= 57:  # digits, 0-9
-                self._args[1] += chr(c)
-            elif c == 59:  # ord(';')
-                self._enter_state(self.State.WAIT_FOR_THIRD_ARG)
-            elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
-                self._cmd = chr(c)
-                self._enter_state(self.State.COMPLETE)
-                return 1
-            else:
-                self.fail()
-
-        elif self._state == self.State.WAIT_FOR_THIRD_ARG:
-            if 48 <= c <= 57:  # digits, 0-9
-                self._args[2] += chr(c)
-            elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
+                self._args.append(int(self._arg_buf))
                 self._cmd = chr(c)
                 self._enter_state(self.State.COMPLETE)
                 return 1
@@ -229,25 +246,34 @@ class EscapeProcessor:
     def _process_command(self):
         assert self._state == self.State.COMPLETE
 
-        if self._cmd in self._cmd_func:
+        cmd = self._cmd if not self._mark else (self._cmd + self._mark)
+
+        if cmd in self._cmd_func:
             self.logger.info(f"escape: fired {self._buffer}")
-            self._cmd_func[self._cmd]()
+            self._cmd_func[cmd]()
             self.reset()
         else:
             self.fail()
 
     def _get_args(self, ind, default=None):
-        return int(self._args[ind]) if self._args[ind] else default
+        if ind < len(self._args):
+            return self._args[ind]
+        else:
+            return default
 
     def reset(self):
-        self._args = [''] * 3
+        self._args = []
         self._cmd = ""
         self._buffer = ""
+        self._arg_buf = ""
+        self._mark = ""
         self._state = self.State.WAIT_FOR_ESC
 
     def fail(self):
+        buf = self._buffer.encode('utf-8')
+        self.reset()
         raise ValueError("Unable to process escape sequence "
-                         f"\\x1b[{self._buffer}.")
+                         f"{buf}.")
 
     def _cmd_n(self):
         # DSR – Device Status Report
@@ -294,43 +320,82 @@ class EscapeProcessor:
         bg_color = None
         bold, underline, reverse = -1, -1, -1
 
-        arg0 = self._get_args(0, default=0)
-        arg1 = self._get_args(1, default=0)
-        arg2 = self._get_args(2, default=0)
+        i = 0
+        while i < len(self._args):
+            arg = self._get_args(i, default=0)
+            if 0 <= arg <= 7:
+                if arg == 0:
+                    bold, underline, reverse = 0, 0, 0
+                    color = DEFAULT_FG_COLOR
+                    bg_color = DEFAULT_BG_COLOR
+                elif arg == 1:
+                    bold = 1
+                elif arg == 4:
+                    underline = 1
+                elif arg == 7:
+                    reverse = 1
+                i += 1
+                continue
 
-        if arg0 == 0:
-            bold, underline, reverse = 0, 0, 0
-            color = DEFAULT_FG_COLOR
-            bg_color = DEFAULT_BG_COLOR
-        elif arg0 == 1:
-            bold = 1
-        elif arg0 == 4:
-            underline = 1
-        elif arg0 == 7:
-            reverse = 1
+            elif 30 <= arg <= 47:
+                if i + 1 < len(self._args):
+                    arg1 = self._get_args(i+1, default=0)
+                else:
+                    arg1 = 0
 
-        elif 30 <= arg0 <= 37:
-            if arg1 == 0:  # foreground 8 colors
-                color = colors8[arg0]
-            elif arg1 == 1:  # foreground 16 colors
-                color = colors16[arg0]
+                if arg <= 37:
+                    if arg1 == 0:  # foreground 8 colors
+                        color = colors8[arg]
+                    elif arg1 == 1:  # foreground 16 colors
+                        color = colors16[arg]
+                elif 40 <= arg:
+                    if arg1 == 0:  # background 8 colors
+                        bg_color = colors8[arg - 10]
+                    elif arg1 == 1:  # background 16 colors
+                        bg_color = colors16[arg - 10]
+                i += 2
+                continue
+            else:
+                if i + 2 < len(self._args):  # need two consecuted args
+                    arg1 = self._get_args(i+1, default=0)
+                    arg2 = self._get_args(i+2, default=0)
+                    if arg == 38 and arg1 == 5 and 0 <= arg2 <= 255:
+                        # xterm 256 colors
+                        color = colors256[arg2]
 
-        elif 40 <= arg0 <= 47:
-            if arg1 == 0:  # background 8 colors
-                bg_color = colors8[arg0 - 10]
-            elif arg1 == 1:  # background 16 colors
-                bg_color = colors16[arg0 - 10]
-
-        elif arg0 == 38 and arg1 == 5 and 0 <= arg2 <= 255:  # xterm 256 colors
-            color = colors256[arg2]
-
-        elif arg0 == 48 and arg1 == 5 and 0 <= arg2 <= 255:  # xterm 256 colors
-            bg_color = colors256[arg2]
+                    elif arg == 48 and arg1 == 5 and 0 <= arg2 <= 255:
+                        # xterm 256 colors
+                        bg_color = colors256[arg2]
+                    i += 3
+                    continue
+                else:
+                    break
 
         self.set_style_cb(color, bg_color, bold, underline, reverse)
 
 
 class Terminal(QWidget):
+
+    # Terminal widget.
+    # Note: One should not call functions that begin with _, especially those
+    #       linking with painting things.
+    #       It is DANGEROUS to call internal painting function outside the main
+    #       thread, Qt will crash immediately. Just don't do that.
+
+    # signal for triggering a on-canvas buffer repaint
+    buffer_repaint_sig = pyqtSignal()
+
+    # signal for triggering a on-canvas cursor repaint
+    cursor_repaint_sig = pyqtSignal()
+
+    # signal for triggering a repaint for both the canvas and the widget
+    total_repaint_sig = pyqtSignal()
+
+    # internal signal for triggering stdout routine for buffering and
+    # painting. Note: Use stdout() method.
+    _stdout_sig = pyqtSignal(str)
+
+
     def __init__(self, width, height, logger=None):
         super().__init__()
 
@@ -340,7 +405,7 @@ class Terminal(QWidget):
         # we paint everything to the pixmap first then paint this pixmap
         # on paint event. This allows us to partially update the canvas.
         self._canvas = QPixmap(width, height)
-        self._canvas_lock = QMutex()
+        self._painter_lock = QMutex()
 
         # initialize a buffer to store all characters to display
         # define in _resize()_ as a deque
@@ -353,9 +418,14 @@ class Terminal(QWidget):
         self._buffer_display_offset = None
         self._cursor_position = Position(0, 0)
 
+        self.buffer_repaint_sig.connect(self._paint_buffer)
+        self.cursor_repaint_sig.connect(self._paint_cursor)
+        self.total_repaint_sig.connect(self._canvas_repaint)
+
         # stores user's input when terminal is put in canonical mode
-        self._input_buffer = ""
-        self._input_buffer_cursor = 0
+        # in case you don't want to use system's buffer
+        # self._input_buffer = ""
+        # self._input_buffer_cursor = 0
 
         # initialize basic styling and geometry
         self.fg_color = None
@@ -389,9 +459,11 @@ class Terminal(QWidget):
 
         self.setFocusPolicy(Qt.StrongFocus)
 
-        # terminal options
-        self.echo = True
-        self.canonical_mode = True
+        # terminal options, in case you don't want system to handle it
+        # self.echo = True
+        # self.canonical_mode = True
+
+        self._stdout_sig.connect(self._stdout)
 
         # escape sequence processor
         self.escape_processor = EscapeProcessor(logger)
@@ -407,7 +479,6 @@ class Terminal(QWidget):
         ep.set_cursor_abs_position_cb = self.cb_set_cursor_abs_pos
         ep.set_cursor_rel_position_cb = self.cb_set_cursor_rel_pos
         ep.report_device_status_cb = lambda: self.stdin_callback("\x1b[0n")
-        ep.report_cursor_position_cb = self.cb_report_cursor_pos
         ep.set_style_cb = self.cb_set_style
 
     def set_bg(self, color: QColor):
@@ -457,13 +528,15 @@ class Terminal(QWidget):
     # ==========================
 
     def paintEvent(self, event):
+        self._painter_lock.lock()
         _qp = QPainter(self)
         _qp.setRenderHint(QPainter.Antialiasing)
         _qp.drawPixmap(0, 0, self._canvas)
         super().paintEvent(event)
+        self._painter_lock.unlock()
 
-    def _paint_buffer(self, invoke_repaint_evt=True):
-        self._canvas_lock.lock()
+    def _paint_buffer(self):
+        self._painter_lock.lock()
 
         self._canvas = QPixmap(self.row_len * self.char_width * self.dpr,
                                int((self.col_len + 0.2)
@@ -511,16 +584,15 @@ class Terminal(QWidget):
                     ft.setUnderline(False)
                     qp.setFont(ft)
                     qp.drawText(ht, cn*cw, " ")
+        qp.end()
 
-        self._canvas_lock.unlock()
-        if invoke_repaint_evt:
-            self.repaint()
+        self._painter_lock.unlock()
 
-    def _paint_cursor(self, invoke_repaint_evt=True):
+    def _paint_cursor(self):
         if not self._buffer:
             return
 
-        self._canvas_lock.lock()
+        self._painter_lock.lock()
         ind_x = self._cursor_position.x
         ind_y = self._cursor_position.y
         x = self._cursor_position.x * self.char_width
@@ -557,14 +629,13 @@ class Terminal(QWidget):
         else:
             qp.drawText(x, cy, " ")
 
-        self._canvas_lock.unlock()
-
-        if invoke_repaint_evt:
-            self.repaint()
+        qp.end()
+        self._painter_lock.unlock()
 
     def _canvas_repaint(self):
-        self._paint_buffer(False)
+        self._paint_buffer()
         self._paint_cursor()
+        self.repaint()
 
     def cb_set_style(self, color, bg_color, bold, underline, reverse):
         self.fg_color = color if color else self.fg_color
@@ -702,7 +773,7 @@ class Terminal(QWidget):
 
         self._buffer_lock.unlock()
 
-        self._paint_buffer(invoke_repaint_evt=False)
+        self._paint_buffer()
         self._restore_cursor_state()
         # self._log_buffer()
 
@@ -710,7 +781,6 @@ class Terminal(QWidget):
               reset_offset=True):
         # _pos_ is position on the screen, not position on the buffer
 
-        self._save_cursor_state_stop_blinking()
         buf = self._buffer
         old_cur_pos = None
 
@@ -769,17 +839,14 @@ class Terminal(QWidget):
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,
                                               self._cursor_position.y)
         # self._log_buffer()
-        self._paint_buffer(invoke_repaint_evt=False)
+        #self._paint_buffer()
         # (leave repaint event to cursor)
-        self._restore_cursor_state()
 
     def write_at_cursor(self, text):
         self.write(text, pos=None, set_cursor=True, reset_offset=False)
         if self._cursor_position.y - self._buffer_display_offset > \
                 self.col_len - 1:
             self._buffer_display_offset = len(self._buffer) - self.col_len
-            self._paint_buffer(invoke_repaint_evt=False)
-            self._paint_cursor()
 
     def _log_buffer(self):
         self.logger.info(f"buffer: length: {len(self._buffer)}")
@@ -826,8 +893,6 @@ class Terminal(QWidget):
                          "|")
 
     def delete_at_cursor(self):
-        self._save_cursor_state_stop_blinking()
-
         pos = self._cursor_position
         self._buffer_lock.lock()
         pos_x = pos.x
@@ -853,10 +918,6 @@ class Terminal(QWidget):
 
         self._cursor_position = Position(pos_x, pos_y)
         self._buffer_lock.unlock()
-
-        self._restore_cursor_state()
-        self._paint_buffer(invoke_repaint_evt=False)
-        self._paint_cursor()
 
     def cb_erase_in_display(self, mode):
         buf = self._buffer
@@ -925,6 +986,7 @@ class Terminal(QWidget):
         self._cursor_blinking_lock.unlock()
 
         self._paint_cursor()
+        self.repaint()
 
     def _switch_cursor_blink(self, state, blink=True):
         self._cursor_blinking_lock.lock()
@@ -937,15 +999,15 @@ class Terminal(QWidget):
 
         self._cursor_blinking_lock.unlock()
         self._paint_cursor()
+        self.repaint()
 
     def _save_cursor_state_stop_blinking(self):
         self._saved_cursor_state = self._cursor_blinking_state
-        self._switch_cursor_blink(state=CursorState.ON, blink=False)
+        self._switch_cursor_blink(CursorState.ON, False)
 
     def _restore_cursor_state(self):
         self._cursor_blinking_state = self._saved_cursor_state
-        self._switch_cursor_blink(state=self._cursor_blinking_state,
-                                  blink=True)
+        self._switch_cursor_blink(self._cursor_blinking_state, True)
 
     def _keep_pos_in_screen(self, x, y):
         if y < self._buffer_display_offset:
@@ -970,60 +1032,84 @@ class Terminal(QWidget):
         self._cursor_position = Position(*self._keep_pos_in_screen(x, y))
 
     def cb_report_cursor_pos(self):
-        self.stdin_callback(f"\x1b[{self._cursor_position.x + 1};"
+        self.stdin_callback(f"\x1b[{self._cursor_position.x + 1}"
                             f"{self._cursor_position.y + 1}")
 
     # ==========================
     #      USER INPUT EVENT
     # ==========================
 
-    def clear_input_buffer(self):
-        self._input_buffer_cursor = 0
-        self._input_buffer = ''
+    # def clear_input_buffer(self):
+    #    self._input_buffer_cursor = 0
+    #    self._input_buffer = ''
 
     def stdout(self, string):
+        # Note that this function accepts UTF-8 only (since python use utf-8).
+        # Normally modern programs will determine the encoding of its stdout
+        # from env variable LC_CTYPE and for most systems, it is set to utf-8.
+        self._stdout_sig.emit(string)
+
+    def _stdout(self, string):
+        # Note that this function accepts UTF-8 only (since python use utf-8).
+        # Normally modern programs will determine the encoding of its stdout
+        # from env variable LC_CTYPE and for most systems, it is set to utf-8.
+        self._save_cursor_state_stop_blinking()
         for char in string:
             self._stdout_char(ord(char))
+        self._restore_cursor_state()
+        self._paint_buffer()
+        self.repaint()
 
     def _stdout_char(self, char):
         try:
-            self.clear_input_buffer()
+            # self.clear_input_buffer()
             ret = self.escape_processor.input(char)
             if ret == 1:
                 self._canvas_repaint()
                 return
             elif ret == -1:
-                if self.echo:
+                if char == ControlChar.CR.value:
+                    self._cursor_position = Position(0,
+                                                     self._cursor_position.y)
+                elif char == ControlChar.BS.value:
+                    self.cb_set_cursor_rel_pos(-1, 0)
+                else:
                     self.write_at_cursor(chr(char))
 
         except ValueError as e:
             self.logger.exception(e)
 
     def input(self, char):
-        if self.echo:
-            if 32 <= char <= 126 or char == ControlChar.LF.value:
-                self.write_at_cursor(chr(char))
+        self.stdin_callback(chr(char))
 
-        if self.canonical_mode:
-            if 32 <= char <= 126:  # oridinary characters, or LF
-                self._input_buffer += chr(char)
-                self._input_buffer_cursor += 1
-            elif char == ControlChar.LF.value:
-                self._input_buffer += chr(char)
-                self._input_buffer_cursor += 1
-                self.stdin_callback(self._input_buffer)
-                self.clear_input_buffer()
-            elif char == ControlChar.BS.value:
-                self.delete_at_cursor()
-                if self._input_buffer_cursor > 0:
-                    self._input_buffer = self._input_buffer[0:-1]
-                    self._input_buffer_cursor -= 1
+        # naive implementation for cooked mode of the terminal
+        # use it if you don't want to use system's cooked mode
+        #
+        # if self.echo:
+        #     if 32 <= char <= 126 or char == ControlChar.LF.value:
+        #         self.write_at_cursor(chr(char))
+
+        # if self.canonical_mode:
+        #     if 32 <= char <= 126:  # oridinary characters, or LF
+        #         self._input_buffer += chr(char)
+        #         self._input_buffer_cursor += 1
+        #     elif char == ControlChar.LF.value or \
+        #         char == ControlChar.CR.value:
+        #         self._input_buffer += chr(char)
+        #         self._input_buffer_cursor += 1
+        #         self.stdin_callback(self._input_buffer)
+        #         self.clear_input_buffer()
+        #     elif char == ControlChar.BS.value:
+        #         self.delete_at_cursor()
+        #         if self._input_buffer_cursor > 0:
+        #             self._input_buffer = self._input_buffer[0:-1]
+        #             self._input_buffer_cursor -= 1
 
     def focusInEvent(self, event):
-        self._switch_cursor_blink(state=CursorState.ON, blink=True)
+        self._switch_cursor_blink(CursorState.ON, True)
 
     def focusOutEvent(self, event):
-        self._switch_cursor_blink(state=CursorState.UNFOCUSED, blink=False)
+        self._switch_cursor_blink(CursorState.UNFOCUSED, False)
 
     def keyPressEvent(self, event):
         key = event.key()
