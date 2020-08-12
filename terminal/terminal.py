@@ -1,7 +1,9 @@
 import logging
+import time
 from collections import deque
 from typing import NamedTuple
 from enum import Enum
+from functools import partial
 
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtGui import QPainter, QColor, QPalette, QFontDatabase, QPen, \
@@ -29,7 +31,6 @@ class ControlChar(Enum):
 
 class Char(NamedTuple):
     char: str
-    cursor: bool = False
     color: QColor = None
     bg_color: QColor = None
     bold: bool = False
@@ -58,8 +59,9 @@ class EscapeProcessor:
         # once entered, reset all buffers
         # if receives a ESC, transfer to 1
 
-        WAIT_FOR_BRAC = 1
+        WAIT_FOR_BRAC_OR_CHAR = 1
         # if receive a [, transfer to 2
+        # if receive a ], transfer to 5
         # if receive a letter/digit, save to cmd buffer, transfer to 4
         # otherwise return to 0
 
@@ -83,6 +85,18 @@ class EscapeProcessor:
         COMPLETE = 5
         # once entered, process the input and return to 0
 
+        OSC_WAIT_FOR_NEXT_ARG = 6
+        # if receives a number/letter, append to osc arg buf, transfer to 7
+        # otherwise return to 0
+
+        OSC_WAIT_FOR_ARG_FINISH = 7
+        # if receives a number/letter, append to osc arg buf, stay at 7
+        # if receive a colon, append arg buf to arg list, transfer to 6
+        # if receive a BEL or ESC, transfer to 8
+        # otherwise return to 0
+
+        OSC_COMPLETE = 8
+
     def __init__(self, logger):
         self.logger = logger
         self._state = self.State.WAIT_FOR_ESC
@@ -91,17 +105,23 @@ class EscapeProcessor:
         self._cmd = ""
         self._buffer = ""
 
-        self._cmd_func = {}
-        self._cmd_func['n'] = self._cmd_n
-        self._cmd_func['m'] = self._cmd_m
-        self._cmd_func['J'] = self._cmd_J
-        self._cmd_func['H'] = self._cmd_H
-        self._cmd_func['K'] = self._cmd_K
-        self._cmd_func['K'] = self._cmd_K
-        self._cmd_func['A'] = self._cmd_A
-        self._cmd_func['B'] = self._cmd_B
-        self._cmd_func['C'] = self._cmd_C
-        self._cmd_func['D'] = self._cmd_D
+        self._esc_func = {}
+
+        self._csi_func = {}
+        self._csi_func['n'] = self._csi_n
+        self._csi_func['n?'] = self._csi_n
+        self._csi_func['m'] = self._csi_m
+        self._csi_func['J'] = self._csi_J
+        self._csi_func['H'] = self._csi_H
+        self._csi_func['K'] = self._csi_K
+        self._csi_func['K'] = self._csi_K
+        self._csi_func['A'] = self._csi_A
+        self._csi_func['B'] = self._csi_B
+        self._csi_func['C'] = self._csi_C
+        self._csi_func['D'] = self._csi_D
+
+        self._csi_func['h?'] = partial(self._csi_h_l_ext, True)
+        self._csi_func['l?'] = partial(self._csi_h_l_ext, False)
 
         # ==== Callbacks ====
 
@@ -110,14 +130,14 @@ class EscapeProcessor:
         #      0: from cursor to the end of screen
         #      1: from start of screen to cursor
         #      2: the entire screen
-        self.erase_in_display_cb = lambda mode: None
+        self.erase_display_cb = lambda mode: None
 
         # Erase In Line
         #  mode:
         #      0: from cursor to the end of line
         #      1: from start of line to cursor
         #      2: the entire line
-        self.erase_in_line_cb = lambda mode: None
+        self.erase_line_cb = lambda mode: None
 
         # Cursor Position(absolute position)
         #  set the position of the cursor
@@ -153,12 +173,24 @@ class EscapeProcessor:
             underlined, reverse: None
 
         # Save Cursor Position
-        #  save cursor positio and current style
+        #  save cursor position and current style
         self.save_cursor_cb = lambda: None
 
         # Restore Cursor Position
         #  restore cursor positio and current style
         self.restore_cursor_cb = lambda: None
+
+        # Set Window Title
+        #  set the title of the terminal
+        self.set_window_title_cb = lambda title: None
+
+        # Use Alternate Screen Buffer
+        #  on: bool, on/off
+        self.use_alt_buffer = lambda on: None
+
+        # Save Cursor and Use Alternate Screen Buffer
+        #  on: bool, on/off
+        self.save_cursor_use_alt_buffer = lambda on: None
 
     def input(self, c: int):
         # process input character c, c is the ASCII code of input.
@@ -174,13 +206,15 @@ class EscapeProcessor:
 
         if self._state == self.State.WAIT_FOR_ESC:
             if c == ControlChar.ESC.value:
-                self._enter_state(self.State.WAIT_FOR_BRAC)
+                self._enter_state(self.State.WAIT_FOR_BRAC_OR_CHAR)
             else:
                 return -1
 
-        elif self._state == self.State.WAIT_FOR_BRAC:
+        elif self._state == self.State.WAIT_FOR_BRAC_OR_CHAR:
             if c == 91:  # ord('[')
                 self._enter_state(self.State.WAIT_FOR_MARKS)
+            elif c == 93:  # ord(']')
+                self._enter_state(self.State.OSC_WAIT_FOR_NEXT_ARG)
             elif 48 <= c <= 57 or \
                     65 <= c <= 90 or 97 <= c <= 122:  # 0-9, A-Z, a-z
                 self._cmd = chr(c)
@@ -233,26 +267,72 @@ class EscapeProcessor:
             # this branch should never be reached
             self.fail()
 
+        # === OSC ===
+        elif self._state == self.State.OSC_WAIT_FOR_NEXT_ARG:
+            if 20 <= c <= 126 and c != 59:  # every visible thing except ;
+                self._arg_buf += chr(c)
+                self._enter_state(self.State.OSC_WAIT_FOR_ARG_FINISH)
+                return 1
+            else:
+                self.fail()
+
+        elif self._state == self.State.OSC_WAIT_FOR_ARG_FINISH:
+            if 20 <= c <= 126 and c != 59:  # every visible thing except ;
+                self._arg_buf += chr(c)
+                return 1
+            elif c == 59:  # ord(';')
+                self._args.append(self._arg_buf)
+                self._arg_buf = ""
+                self._enter_state(self.State.OSC_WAIT_FOR_NEXT_ARG)
+                return 1
+            elif c == 7 or c == 27:  # BEL, \x07 or ESC, \x1b
+                self._args.append(self._arg_buf)
+                self._enter_state(self.State.OSC_COMPLETE)
+                return 1
+            else:
+                self.fail()
+
+        elif self._state == self.State.OSC_COMPLETE:
+            # this branch should never be reached
+            self.fail()
+
+        else:
+            raise ValueError(f"Unhandle state {self._state}")
+
         return 0
 
     def _enter_state(self, _state):
         if _state == self.State.COMPLETE:
             self._state = self.State.COMPLETE
-            self._process_command()
+            self._process_csi_command()
+            self.reset()
+        elif _state == self.State.OSC_COMPLETE:
+            self._state = self.State.OSC_COMPLETE
+            self._process_osc_command()
             self.reset()
         else:
             self._state = _state
 
-    def _process_command(self):
+    def _process_csi_command(self):
         assert self._state == self.State.COMPLETE
 
         cmd = self._cmd if not self._mark else (self._cmd + self._mark)
 
-        if cmd in self._cmd_func:
-            self.logger.info(f"escape: fired {self._buffer}")
-            self._cmd_func[cmd]()
+        if cmd in self._csi_func:
+            self.logger.debug(f"escape: fired {self._buffer}")
+            self._csi_func[cmd]()
             self.reset()
         else:
+            self.fail()
+
+    def _process_osc_command(self):
+        assert self._state == self.State.OSC_COMPLETE
+        try:
+            op = int(self._args[0])
+            if op in [0, 1, 2]:
+                text = self._args[1]
+                self.set_window_title_cb(text)
+        except (ValueError, IndexError):
             self.fail()
 
     def _get_args(self, ind, default=None):
@@ -275,7 +355,7 @@ class EscapeProcessor:
         raise ValueError("Unable to process escape sequence "
                          f"{buf}.")
 
-    def _cmd_n(self):
+    def _csi_n(self):
         # DSR – Device Status Report
         arg = self._get_args(0, default=0)
         if arg == 6:
@@ -283,38 +363,38 @@ class EscapeProcessor:
         else:
             self.report_device_status_cb()
 
-    def _cmd_J(self):
+    def _csi_J(self):
         # ED – Erase In Display
-        self.erase_in_display_cb(self._get_args(0, default=0))
+        self.erase_display_cb(self._get_args(0, default=0))
 
-    def _cmd_K(self):
+    def _csi_K(self):
         # EL – Erase In Line
-        self.erase_in_line_cb(self._get_args(0, default=0))
+        self.erase_line_cb(self._get_args(0, default=0))
 
-    def _cmd_H(self):
+    def _csi_H(self):
         # CUP – Cursor Position
         self.set_cursor_abs_position_cb(
             self._get_args(0, default=1) - 1,  # begin from 1 -> begin from 0
             self._get_args(1, default=1) - 1
         )
 
-    def _cmd_A(self):
+    def _csi_A(self):
         # Cursor Up
         self.set_cursor_rel_position_cb(0, -1 * self._get_args(0, default=1))
 
-    def _cmd_B(self):
+    def _csi_B(self):
         # Cursor Down
         self.set_cursor_rel_position_cb(0, +1 * self._get_args(0, default=1))
 
-    def _cmd_C(self):
+    def _csi_C(self):
         # Cursor Right
         self.set_cursor_rel_position_cb(-1 * self._get_args(0, default=1), 0)
 
-    def _cmd_D(self):
+    def _csi_D(self):
         # Cursor Left
         self.set_cursor_rel_position_cb(+1 * self._get_args(0, default=1), 0)
 
-    def _cmd_m(self):
+    def _csi_m(self):
         # Colors and decorators
         color = None
         bg_color = None
@@ -374,6 +454,16 @@ class EscapeProcessor:
         self.set_style_cb(color, bg_color, bold, underline, reverse)
 
 
+    def _csi_h_l_ext(self, on):
+        arg = self._get_args(0, default=0)
+        if arg == 0:
+            self.fail()
+        elif arg == 47:
+            self.use_alt_buffer(on)
+        elif arg == 1049:
+            self.save_cursor_use_alt_buffer(on)
+
+
 class Terminal(QWidget):
 
     # Terminal widget.
@@ -418,22 +508,18 @@ class Terminal(QWidget):
         self._buffer_display_offset = None
         self._cursor_position = Position(0, 0)
 
-        self.buffer_repaint_sig.connect(self._paint_buffer)
-        self.cursor_repaint_sig.connect(self._paint_cursor)
-        self.total_repaint_sig.connect(self._canvas_repaint)
-
         # stores user's input when terminal is put in canonical mode
         # in case you don't want to use system's buffer
         # self._input_buffer = ""
         # self._input_buffer_cursor = 0
 
         # initialize basic styling and geometry
-        self.fg_color = None
-        self.bg_color = None
+        self._fg_color = None
+        self._bg_color = None
         # three terminal char styles
-        self.bold = False
-        self.underline = False
-        self.reverse = False
+        self._bold = False
+        self._underline = False
+        self._reversed = False
 
         self.font = None
         self.char_width = None
@@ -449,6 +535,11 @@ class Terminal(QWidget):
         self.setAutoFillBackground(True)
         self.setMinimumSize(width, height)
 
+        # connect reapint signals
+        self.buffer_repaint_sig.connect(self._paint_buffer)
+        self.cursor_repaint_sig.connect(self._paint_cursor)
+        self.total_repaint_sig.connect(self._canvas_repaint)
+
         # intializing blinking cursor
         self._cursor_blinking_lock = QMutex()
         self._cursor_blinking_state = CursorState.ON
@@ -457,9 +548,18 @@ class Terminal(QWidget):
         self._cursor_blinking_timer.timeout.connect(self._blink_cursor)
         self._switch_cursor_blink(state=CursorState.ON, blink=True)
 
+        # initialize alternative screen buffer, which is a xterm feature.
+        # when activating alternative buffer, normal buffer will be saved in
+        # these variables, and when toggle back, these variables will be put
+        # back to self._buffer, etc.
+        self._alt_buffer = None
+        self._alt_line_wrapped_flags = None
+        self._alt_buffer_display_offset = None
+        self._alt_cursor_position = Position(0, 0)
+
         self.setFocusPolicy(Qt.StrongFocus)
 
-        # terminal options, in case you don't want system to handle it
+        # terminal options, in case you don't want pty to handle it
         # self.echo = True
         # self.canonical_mode = True
 
@@ -474,22 +574,25 @@ class Terminal(QWidget):
 
     def _register_escape_callbacks(self):
         ep = self.escape_processor
-        ep.erase_in_display_cb = self.cb_erase_in_display
-        ep.erase_in_line_cb = self.cb_erase_in_line
-        ep.set_cursor_abs_position_cb = self.cb_set_cursor_abs_pos
-        ep.set_cursor_rel_position_cb = self.cb_set_cursor_rel_pos
+        ep.erase_display_cb = self.erase_display
+        ep.erase_line_cb = self.erase_line
+        ep.set_cursor_abs_position_cb = self.set_cursor_abs_pos
+        ep.set_cursor_rel_position_cb = self.set_cursor_rel_pos
         ep.report_device_status_cb = lambda: self.stdin_callback("\x1b[0n")
-        ep.set_style_cb = self.cb_set_style
+        ep.report_cursor_position_cb = self.report_cursor_pos
+        ep.set_style_cb = self.set_style
+        ep.use_alt_buffer = self.toggle_alt_screen
+        ep.save_cursor_use_alt_buffer = self.toggle_alt_screen_save_cursor
 
     def set_bg(self, color: QColor):
-        self.bg_color = color
+        self._bg_color = color
 
         pal = self.palette()
         pal.setColor(QPalette.Background, color)
         self.setPalette(pal)
 
     def set_fg(self, color: QColor):
-        self.fg_color = color
+        self._fg_color = color
         pal = self.palette()
         pal.setColor(QPalette.Foreground, color)
         self.setPalette(pal)
@@ -544,7 +647,7 @@ class Terminal(QWidget):
         self._canvas.setDevicePixelRatio(self.dpr)
 
         qp = QPainter(self._canvas)
-        qp.fillRect(self.rect(), self.bg_color)
+        qp.fillRect(self.rect(), self._bg_color)
         if not self._buffer:
             return
 
@@ -552,7 +655,7 @@ class Terminal(QWidget):
         ch = self.char_height
         lh = self.line_height
         ft = self.font
-        fg_color = self.fg_color
+        fg_color = self._fg_color
 
         ht = 0
 
@@ -565,7 +668,7 @@ class Terminal(QWidget):
 
             ht += lh
             for cn, c in enumerate(row):
-                if c and not c.cursor:
+                if c:
                     ft.setBold(c.bold)
                     ft.setUnderline(c.underline)
                     qp.setFont(ft)
@@ -615,8 +718,8 @@ class Terminal(QWidget):
             qp.drawRect(x + 1, y + 1, cw - 2, ch - 2)
         else:
             if self._cursor_blinking_state == CursorState.ON:
-                bg = self.fg_color
-                fg = self.bg_color
+                bg = self._fg_color
+                fg = self._bg_color
 
             qp.fillRect(x, y, cw, ch, bg)
         qp.setPen(fg)
@@ -637,12 +740,12 @@ class Terminal(QWidget):
         self._paint_cursor()
         self.repaint()
 
-    def cb_set_style(self, color, bg_color, bold, underline, reverse):
-        self.fg_color = color if color else self.fg_color
-        self.bg_color = bg_color if bg_color else self.bg_color
-        self.bold = bool(bold) if bold != -1 else self.bold
-        self.underline = bool(underline) if underline != -1 else self.underline
-        self.reverse = bool(reverse) if reverse != -1 else self.reverse
+    def set_style(self, color, bg_color, bold, underline, reverse):
+        self._fg_color = color if color else self._fg_color
+        self._bg_color = bg_color if bg_color else self._bg_color
+        self._bold = bool(bold) if bold != -1 else self._bold
+        self._underline = bool(underline) if underline != -1 else self._underline
+        self._reversed = bool(reverse) if reverse != -1 else self._reversed
 
     # ==========================
     #  SCREEN BUFFER FUNCTIONS
@@ -659,10 +762,12 @@ class Terminal(QWidget):
     def resize(self, width, height):
         super().resize(width, height)
 
+        self._buffer_lock.lock()
+
         row_len = int(width / self.char_width)    # Avoid "." inside the loop
         col_len = int(height / self.line_height)
-        cur_x = self._cursor_position.x
-        cur_y = self._cursor_position.y
+        old_cur_x = cur_x = self._cursor_position.x
+        old_cur_y = cur_y = self._cursor_position.y
 
         if self._buffer:
             old_row_len = self.row_len
@@ -674,6 +779,7 @@ class Terminal(QWidget):
                     for i in range(filler):
                         self._buffer.appendleft([None for x in range(row_len)])
                         self._line_wrapped_flags.appendleft(False)
+                self._buffer_lock.unlock()
                 return
 
             self.logger.info(f"screen: resize triggered, new size ({row_len}x"
@@ -721,9 +827,11 @@ class Terminal(QWidget):
                     # under which we should avoid an extra line break being
                     # inserted
                     breaked = False
-                    _new_buffer[new_y][new_x] = c
-                    if c and c.cursor:
+                    if old_cur_x == x and old_cur_y == y:
                         cur_x, cur_y = new_x, new_y
+
+                    _new_buffer[new_y][new_x] = c
+
                     new_x += 1
 
                     if new_x >= row_len:
@@ -760,8 +868,6 @@ class Terminal(QWidget):
                                  for i in range(col_len)])
             _new_wrap = deque([False for i in range(col_len)])
 
-        self._buffer_lock.lock()
-
         self._save_cursor_state_stop_blinking()
         self.row_len = row_len
         self.col_len = col_len
@@ -794,17 +900,13 @@ class Terminal(QWidget):
             pos_x = pos.x
             pos_y = pos.y + offset
 
-        if not set_cursor:
-            old_cur_pos = self._cursor_position
-            buf[old_cur_pos.y][old_cur_pos.x] = None
+        old_cur_pos = self._cursor_position
 
-        color, bgcolor = self.fg_color, self.bg_color
-        bold, underline, reverse = self.bold, self.underline, self.reverse
+        color, bgcolor = self._fg_color, self._bg_color
+        bold, underline, reverse = self._bold, self._underline, self._reversed
 
-        # all chars + the cursor char
-        char_list = [Char(t, False, color, bgcolor,
-                          bold, underline, reverse) for t in text] \
-            + [Char(' ', True, color, bgcolor, bold, underline, reverse)]
+        char_list = [Char(t, color, bgcolor,
+                          bold, underline, reverse) for t in text]
 
         for i, t in enumerate(char_list):
             if t.char == '\n':
@@ -816,10 +918,7 @@ class Terminal(QWidget):
                 continue
 
             buf[pos_y][pos_x] = t
-            if not i == len(char_list) - 1:
-                # this if-statement is for currectly setting the cursor
-                # position
-                pos_x += 1
+            pos_x += 1
 
             if pos_x >= self.row_len:
                 pos_x = 0
@@ -830,16 +929,13 @@ class Terminal(QWidget):
                 self._line_wrapped_flags[pos_y - 1] = True
 
         if set_cursor:
-            # self.logger.info(f"cursor: ({pos_x}, {pos_y})")
             self._cursor_position = Position(pos_x, pos_y)
-        else:
-            buf[old_cur_pos.y][old_cur_pos.x] = Char(char=' ', cursor=True)
 
         if reset_offset:
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,
                                               self._cursor_position.y)
         # self._log_buffer()
-        #self._paint_buffer()
+        # self._paint_buffer()
         # (leave repaint event to cursor)
 
     def write_at_cursor(self, text):
@@ -897,7 +993,6 @@ class Terminal(QWidget):
         self._buffer_lock.lock()
         pos_x = pos.x
         pos_y = pos.y
-        self._buffer[pos_y][pos_x] = None  # remove current cursor
 
         # locate character to delete
         pos_x -= 1
@@ -907,11 +1002,9 @@ class Terminal(QWidget):
 
         if pos_y < 0:
             pos_x, pos_y = 0, 0
-            self._buffer[0][0] = Char(char=' ', cursor=True)
         else:
             while pos_x > 0 and not self._buffer[pos_y][pos_x]:
                 pos_x -= 1
-            self._buffer[pos_y][pos_x] = Char(char=' ', cursor=True)
 
         if pos_y < self._buffer_display_offset:
             self._buffer_display_offset = pos_y
@@ -919,44 +1012,84 @@ class Terminal(QWidget):
         self._cursor_position = Position(pos_x, pos_y)
         self._buffer_lock.unlock()
 
-    def cb_erase_in_display(self, mode):
+    def erase_display(self, mode=2):
         buf = self._buffer
         cur_pos = self._cursor_position
         offset = self._buffer_display_offset
 
         if mode == 0:
             for x in range(cur_pos.x, self.row_len):
-                buf[offset + cur_pos.y][x] = None
+                buf[cur_pos.y][x] = None
 
             for y in range(cur_pos.y + 1, offset + self.col_len):
                 for x in range(self.row_len):
-                    buf[offset + y][x] = None
+                    buf[y][x] = None
         elif mode == 1:
             for y in range(offset, cur_pos.y):
                 for x in range(self.row_len):
-                    buf[offset + y][x] = None
+                    buf[y][x] = None
 
             for x in range(cur_pos.x):
-                buf[offset + cur_pos.y][x] = None
+                buf[cur_pos.y][x] = None
         else:
             for y in range(offset, offset + self.col_len):
                 for x in range(self.row_len):
-                    buf[offset + y][x] = None
+                    buf[y][x] = None
 
-    def cb_erase_in_line(self, mode):
+    def erase_line(self, mode=3):
         buf = self._buffer
         cur_pos = self._cursor_position
-        offset = self._buffer_display_offset
 
         if mode == 0:
             for x in range(cur_pos.x, self.row_len):
-                buf[offset + cur_pos.y][x] = None
+                buf[cur_pos.y][x] = None
         elif mode == 1:
             for x in range(cur_pos.x):
-                buf[offset + cur_pos.y][x] = None
+                buf[cur_pos.y][x] = None
         else:
             for x in range(self.row_len):
-                buf[offset + cur_pos.y][x] = None
+                buf[cur_pos.y][x] = None
+
+    def toggle_alt_screen(self, on=True):
+        if on:
+            # save current buffer
+            self._alt_buffer = self._buffer
+            self._alt_line_wrapped_flags = self._line_wrapped_flags
+            self._alt_buffer_display_offset = self._buffer_display_offset
+
+            self.erase_display()
+        else:
+            if not self._alt_buffer:
+                return
+
+            self._buffer = self._alt_buffer
+            self._line_wrapped_flags = self._alt_line_wrapped_flags
+            self._buffer_display_offset = self._alt_buffer_display_offset
+
+            self._alt_buffer = None
+            self._alt_line_wrapped_flags = None
+            self._alt_buffer_display_offset = 0
+
+        self._bold = False
+        self._underline = False
+        self._reversed = False
+
+        self._fg_color = DEFAULT_FG_COLOR
+        self._bg_color = DEFAULT_BG_COLOR
+
+        self._canvas_repaint()
+
+    def toggle_alt_screen_save_cursor(self, on=True):
+        if on:
+            # save current buffer
+            self._alt_cursor_position = self._cursor_position
+        else:
+            if not self._alt_buffer:
+                return
+            self._cursor_position = self._alt_cursor_position
+
+        self.toggle_alt_screen(on)
+
 
     # ==========================
     #       CURSOR CONTROL
@@ -1009,6 +1142,12 @@ class Terminal(QWidget):
         self._cursor_blinking_state = self._saved_cursor_state
         self._switch_cursor_blink(self._cursor_blinking_state, True)
 
+    def set_cursor_position(self, x, y):
+        old_cur_pos = self._cursor_position
+        self._cursor_position = Position(
+            *self._move_screen_with_pos(x, y)
+        )
+
     def _keep_pos_in_screen(self, x, y):
         if y < self._buffer_display_offset:
             y = self._buffer_display_offset
@@ -1022,18 +1161,58 @@ class Terminal(QWidget):
 
         return x, y
 
-    def cb_set_cursor_rel_pos(self, offset_x, offset_y):
+    def _move_screen_with_pos(self, x, y):
+        while x < 0:
+            x = self.row_len + x
+            y -= 1
+
+        while x >= self.row_len:
+            x = x - self.row_len
+            y += 1
+
+        if y < self._buffer_display_offset:
+            self._buffer_display_offset = y
+
+        if y >= self._buffer_display_offset + self.col_len:
+            while y >= len(self._buffer):
+                self._buffer.append([None for x in range(self.row_len)])
+                self._line_wrapped_flags.append(False)
+            self._buffer_display_offset = y - self.col_len + 1
+
+        return x, y
+
+    def backspace(self, count=1):
+        x = self._cursor_position.x - count
+        self.set_cursor_position(
+            *self._move_screen_with_pos(x, self._cursor_position.y)
+        )
+
+    def linefeed(self):
+        y = self._cursor_position.y + 1
+        x = 0
+
+        self.set_cursor_position(
+            *self._move_screen_with_pos(x, y)
+        )
+
+    def carriage_feed(self):
+        y = self._cursor_position.y
+        x = 0
+
+        self.set_cursor_position(x, y)
+
+    def set_cursor_rel_pos(self, offset_x, offset_y):
         x = self._cursor_position.x + offset_x
         y = self._cursor_position.y + offset_y
 
-        self._cursor_position = Position(*self._keep_pos_in_screen(x, y))
+        self.set_cursor_position(*self._keep_pos_in_screen(x, y))
 
-    def cb_set_cursor_abs_pos(self, x, y):
-        self._cursor_position = Position(*self._keep_pos_in_screen(x, y))
+    def set_cursor_abs_pos(self, x, y):
+        self.set_cursor_position(*self._keep_pos_in_screen(x, y))
 
-    def cb_report_cursor_pos(self):
-        self.stdin_callback(f"\x1b[{self._cursor_position.x + 1}"
-                            f"{self._cursor_position.y + 1}")
+    def report_cursor_pos(self):
+        self.stdin_callback(f"\x1b[{self._cursor_position.x + 1};"
+                            f"{self._cursor_position.y + 1}R")
 
     # ==========================
     #      USER INPUT EVENT
@@ -1069,12 +1248,22 @@ class Terminal(QWidget):
                 return
             elif ret == -1:
                 if char == ControlChar.CR.value:
-                    self._cursor_position = Position(0,
-                                                     self._cursor_position.y)
+                    self.set_cursor_position(0, self._cursor_position.y)
                 elif char == ControlChar.BS.value:
-                    self.cb_set_cursor_rel_pos(-1, 0)
-                else:
+                    self.backspace()
+                elif char == ControlChar.LF.value:
+                    self.write_at_cursor("\n")
+                elif char == ControlChar.CR.value:
+                    self.carriage_feed()
+                elif char == ControlChar.TAB.value:
+                    self.write_at_cursor("        ")
+                elif char == ControlChar.BEL.value:
+                    # TODO: visual bell
+                    pass
+                elif 32 <= char <= 126 or char >= 128:
                     self.write_at_cursor(chr(char))
+                else:
+                    self.logger.warn(f"Unhandled char {hex(char)}.")
 
         except ValueError as e:
             self.logger.exception(e)
