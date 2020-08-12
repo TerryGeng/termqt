@@ -36,6 +36,8 @@ class TerminalIO:
         import pty
         import shlex
         import fcntl
+        import struct
+        import termios
 
         rows = self.rows
         cols = self.cols
@@ -54,6 +56,7 @@ class TerminalIO:
             except OSError:
                 pass
 
+            env = self.env
             env["COLUMNS"] = str(cols)
             env["LINES"] = str(rows)
             env["TERM"] = env.get("TERM", "xterm-256color")
@@ -62,7 +65,7 @@ class TerminalIO:
             env["PYTHONIOENCODING"] = "utf_8"
 
             os.dup2(stderr, stdout)
-            os.execvpe(cmd[0], cmd, os.environ)
+            os.execvpe(cmd[0], cmd, env)
 
         else:
             # we are still in this process (master)
@@ -73,6 +76,11 @@ class TerminalIO:
             # the length of available data is less than size.
             fl = fcntl.fcntl(fd, fcntl.F_GETFL)
             fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+            time.sleep(0.05)
+            s = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, s)
+            os.kill(self.pid, signal.SIGWINCH)
 
             threading.Thread(target=self._read_loop, daemon=True).start()
 

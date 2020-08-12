@@ -192,6 +192,9 @@ class EscapeProcessor:
         #  on: bool, on/off
         self.save_cursor_use_alt_buffer = lambda on: None
 
+        # Auto-wrap
+        #  on: bool, on/off
+
     def input(self, c: int):
         # process input character c, c is the ASCII code of input.
         #
@@ -388,11 +391,11 @@ class EscapeProcessor:
 
     def _csi_C(self):
         # Cursor Right
-        self.set_cursor_rel_position_cb(-1 * self._get_args(0, default=1), 0)
+        self.set_cursor_rel_position_cb(+1 * self._get_args(0, default=1), 0)
 
     def _csi_D(self):
         # Cursor Left
-        self.set_cursor_rel_position_cb(+1 * self._get_args(0, default=1), 0)
+        self.set_cursor_rel_position_cb(-1 * self._get_args(0, default=1), 0)
 
     def _csi_m(self):
         # Colors and decorators
@@ -572,11 +575,13 @@ class Terminal(QWidget):
         # callbacks
         self.stdin_callback = lambda t: print(t)
 
+        self._tst_buf = ""
+
     def _register_escape_callbacks(self):
         ep = self.escape_processor
         ep.erase_display_cb = self.erase_display
         ep.erase_line_cb = self.erase_line
-        ep.set_cursor_abs_position_cb = self.set_cursor_abs_pos
+        ep.set_cursor_abs_position_cb = self.set_cursor_position
         ep.set_cursor_rel_position_cb = self.set_cursor_rel_pos
         ep.report_device_status_cb = lambda: self.stdin_callback("\x1b[0n")
         ep.report_cursor_position_cb = self.report_cursor_pos
@@ -950,11 +955,14 @@ class Terminal(QWidget):
                          "-" * self.row_len +
                          "|")
 
+        cp = self._cursor_position
         for ln in range(len(self._buffer)):
             line = self._buffer[ln]
             s = ""
-            for char in line:
-                if char:
+            for x, char in enumerate(line):
+                if cp.x == x and cp.y == ln:
+                    s += "█"
+                elif char:
                     s += char.char
                 else:
                     s += " "
@@ -972,11 +980,14 @@ class Terminal(QWidget):
 
         offset = len(self._buffer) - self.col_len
 
+        cp = self._cursor_position
         for ln in range(self.col_len):
             line = self._buffer[ln + offset]
             s = ""
-            for char in line:
-                if char:
+            for x, char in enumerate(line):
+                if cp.x == x and cp.y == ln:
+                    s += "█"
+                elif char:
                     s += char.char
                 else:
                     s += " "
@@ -1207,9 +1218,6 @@ class Terminal(QWidget):
 
         self.set_cursor_position(*self._keep_pos_in_screen(x, y))
 
-    def set_cursor_abs_pos(self, x, y):
-        self.set_cursor_position(*self._keep_pos_in_screen(x, y))
-
     def report_cursor_pos(self):
         self.stdin_callback(f"\x1b[{self._cursor_position.x + 1};"
                             f"{self._cursor_position.y + 1}R")
@@ -1247,6 +1255,7 @@ class Terminal(QWidget):
                 self._canvas_repaint()
                 return
             elif ret == -1:
+                self._tst_buf += chr(char)
                 if char == ControlChar.CR.value:
                     self.set_cursor_position(0, self._cursor_position.y)
                 elif char == ControlChar.BS.value:

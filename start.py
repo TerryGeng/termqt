@@ -42,7 +42,8 @@ if __name__ == "__main__":
 
     window.show()
 
-    terminal_io = TerminalIO(400, 300, "/bin/bash", logger=logger)
+    terminal_io = TerminalIO(terminal.row_len, terminal.col_len,
+                             "/bin/bash", logger=logger)
     terminal_io.stdout_callback = terminal.stdout
     terminal.stdin_callback = terminal_io.write
     terminal_io.spawn()
