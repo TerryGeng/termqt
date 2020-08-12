@@ -1,5 +1,6 @@
 import logging
 import time
+from copy import deepcopy
 from collections import deque
 from typing import NamedTuple
 from enum import Enum
@@ -407,6 +408,7 @@ class EscapeProcessor:
         while i < len(self._args):
             arg = self._get_args(i, default=0)
             if 0 <= arg <= 7:
+                i += 1
                 if arg == 0:
                     bold, underline, reverse = 0, 0, 0
                     color = DEFAULT_FG_COLOR
@@ -417,14 +419,20 @@ class EscapeProcessor:
                     underline = 1
                 elif arg == 7:
                     reverse = 1
-                i += 1
                 continue
 
-            elif 30 <= arg <= 47:
-                if i + 1 < len(self._args):
-                    arg1 = self._get_args(i+1, default=0)
+            elif 30 <= arg <= 37 or 40 <= arg <= 47 or \
+                90 <= arg <= 97 or 100 <= arg <= 107:
+                if arg >= 90:
+                    arg -= 60
+                    arg1 = 1
+                    i += 1
                 else:
-                    arg1 = 0
+                    if i + 1 < len(self._args):
+                        arg1 = self._get_args(i+1, default=0)
+                    else:
+                        arg1 = 0
+                    i += 2
 
                 if arg <= 37:
                     if arg1 == 0:  # foreground 8 colors
@@ -436,12 +444,13 @@ class EscapeProcessor:
                         bg_color = colors8[arg - 10]
                     elif arg1 == 1:  # background 16 colors
                         bg_color = colors16[arg - 10]
-                i += 2
                 continue
+
             else:
                 if i + 2 < len(self._args):  # need two consecuted args
                     arg1 = self._get_args(i+1, default=0)
                     arg2 = self._get_args(i+2, default=0)
+                    i += 3
                     if arg == 38 and arg1 == 5 and 0 <= arg2 <= 255:
                         # xterm 256 colors
                         color = colors256[arg2]
@@ -449,7 +458,6 @@ class EscapeProcessor:
                     elif arg == 48 and arg1 == 5 and 0 <= arg2 <= 255:
                         # xterm 256 colors
                         bg_color = colors256[arg2]
-                    i += 3
                     continue
                 else:
                     break
@@ -896,6 +904,7 @@ class Terminal(QWidget):
         old_cur_pos = None
 
         offset = len(self._buffer) - self.col_len
+        row_len = self.row_len
 
         if not pos:
             pos = self._cursor_position
@@ -914,7 +923,7 @@ class Terminal(QWidget):
                           bold, underline, reverse) for t in text]
 
         for i, t in enumerate(char_list):
-            if t.char == '\n':
+            if pos_x == row_len or t.char == '\n':
                 pos_x = 0
                 pos_y += 1
                 if pos_y == len(buf):
@@ -925,7 +934,7 @@ class Terminal(QWidget):
             buf[pos_y][pos_x] = t
             pos_x += 1
 
-            if pos_x >= self.row_len:
+            if pos_x > row_len:
                 pos_x = 0
                 pos_y += 1
                 if pos_y == len(buf):
@@ -967,8 +976,13 @@ class Terminal(QWidget):
                 else:
                     s += " "
 
-            self.logger.info(f"buffer({ln:2d}): |{s}|" +
-                             ("x" if self._line_wrapped_flags[ln] else ""))
+            if cp.y == ln and cp.x == self.row_len:
+                self.logger.info(f"buffer({ln:2d}): |{s}█" +
+                                 ("x" if self._line_wrapped_flags[ln] else ""))
+            else:
+                self.logger.info(f"buffer({ln:2d}): |{s}|" +
+                                 ("x" if self._line_wrapped_flags[ln] else ""))
+
         self.logger.info(f"buffer({ln:2d}): |" +
                          "-" * self.row_len +
                          "|")
@@ -992,9 +1006,16 @@ class Terminal(QWidget):
                 else:
                     s += " "
 
-            self.logger.info(f"screen({self.row_len}x{self.col_len}): |{s}|" +
-                             ("x" if self._line_wrapped_flags[ln + offset]
-                              else ""))
+            if cp.y == ln and cp.x == self.row_len:
+                self.logger.info(f"screen({self.row_len}x{self.col_len}): "
+                                 f"|{s}█" +
+                                 ("x" if self._line_wrapped_flags[ln + offset]
+                                  else ""))
+            else:
+                self.logger.info(f"screen({self.row_len}x{self.col_len}): "
+                                 f"|{s}|" +
+                                 ("x" if self._line_wrapped_flags[ln + offset]
+                                  else ""))
         self.logger.info(f"screen({self.row_len}x{self.col_len}): |" +
                          "-"*self.row_len +
                          "|")
@@ -1064,11 +1085,12 @@ class Terminal(QWidget):
     def toggle_alt_screen(self, on=True):
         if on:
             # save current buffer
-            self._alt_buffer = self._buffer
-            self._alt_line_wrapped_flags = self._line_wrapped_flags
+            self._alt_buffer = deepcopy(self._buffer)
+            self._alt_line_wrapped_flags = deepcopy(self._line_wrapped_flags)
             self._alt_buffer_display_offset = self._buffer_display_offset
 
             self.erase_display()
+            self.set_cursor_position(0, 0)
         else:
             if not self._alt_buffer:
                 return
@@ -1219,8 +1241,9 @@ class Terminal(QWidget):
         self.set_cursor_position(*self._keep_pos_in_screen(x, y))
 
     def report_cursor_pos(self):
-        self.stdin_callback(f"\x1b[{self._cursor_position.x + 1};"
-                            f"{self._cursor_position.y + 1}R")
+        x = self._cursor_position.x + 1
+        y = self._cursor_position.y - self._buffer_display_offset + 1
+        self.stdin_callback(f"\x1b[{x};{y}R")
 
     # ==========================
     #      USER INPUT EVENT
@@ -1240,20 +1263,20 @@ class Terminal(QWidget):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
-        self._save_cursor_state_stop_blinking()
+        need_draw = False
         for char in string:
-            self._stdout_char(ord(char))
-        self._restore_cursor_state()
-        self._paint_buffer()
-        self.repaint()
+            need_draw = self._stdout_char(ord(char)) or need_draw
+        if need_draw:
+            self._paint_buffer()
+            self.repaint()
 
     def _stdout_char(self, char):
+        # ret: need_draw
         try:
             # self.clear_input_buffer()
             ret = self.escape_processor.input(char)
             if ret == 1:
-                self._canvas_repaint()
-                return
+                return True
             elif ret == -1:
                 self._tst_buf += chr(char)
                 if char == ControlChar.CR.value:
@@ -1273,6 +1296,9 @@ class Terminal(QWidget):
                     self.write_at_cursor(chr(char))
                 else:
                     self.logger.warn(f"Unhandled char {hex(char)}.")
+                return True
+
+            return False
 
         except ValueError as e:
             self.logger.exception(e)

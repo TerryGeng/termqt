@@ -47,7 +47,9 @@ if __name__ == "__main__":
     terminal_io.stdout_callback = terminal.stdout
     terminal.stdin_callback = terminal_io.write
     terminal_io.spawn()
+    # f = open("typescript", "r")
     # def test():
+    #     terminal.stdout(f.read())
     #     terminal._log_screen()
     # import cProfile
     # cProfile.run('test()')
