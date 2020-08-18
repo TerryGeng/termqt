@@ -6,15 +6,7 @@ from PyQt5.QtCore import Qt, QCoreApplication
 from terminal import Terminal, TerminalIO
 
 
-def except_hook(cls, exception, traceback):
-    sys.__excepthook__(cls, exception, traceback)
-
-
 if __name__ == "__main__":
-
-    import sys
-    sys.excepthook = except_hook
-
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     handler = logging.StreamHandler()
@@ -46,6 +38,7 @@ if __name__ == "__main__":
                              "/bin/bash", logger=logger)
     terminal_io.stdout_callback = terminal.stdout
     terminal.stdin_callback = terminal_io.write
+    terminal.resize_callback = terminal_io.resize
     terminal_io.spawn()
     # f = open("typescript", "r")
     # def test():

@@ -323,7 +323,7 @@ class EscapeProcessor:
         cmd = self._cmd if not self._mark else (self._cmd + self._mark)
 
         if cmd in self._csi_func:
-            self.logger.debug(f"escape: fired {self._buffer}")
+            # self.logger.debug(f"escape: fired {self._buffer}")
             self._csi_func[cmd]()
             self.reset()
         else:
@@ -532,12 +532,15 @@ class Terminal(QWidget):
         self._underline = False
         self._reversed = False
 
+        self._width = width
+        self._height = height
+
         self.font = None
         self.char_width = None
         self.char_height = None
         self.line_height = None
-        self.row_len = None
-        self.col_len = None
+        self.row_len = None  # Guess what? The number of rows is col_len,
+        self.col_len = None  # the number of columns is row_len
         self.dpr = self.devicePixelRatioF()
 
         self.set_bg(DEFAULT_BG_COLOR)
@@ -582,6 +585,7 @@ class Terminal(QWidget):
 
         # callbacks
         self.stdin_callback = lambda t: print(t)
+        self.resize_callback = lambda rows, cols: None
 
         self._tst_buf = ""
 
@@ -635,6 +639,9 @@ class Terminal(QWidget):
 
         self.logger.info(f"font: Font {info.family()} selected, character "
                          f"size {self.char_width}x{self.char_height}.")
+
+        self.row_len = int(self._width / self.char_width)    # Avoid "." inside the loop
+        self.col_len = int(self._height / self.line_height)
 
     def resizeEvent(self, event):
         self.resize(event.size().width(), event.size().height())
@@ -711,8 +718,10 @@ class Terminal(QWidget):
         self._painter_lock.lock()
         ind_x = self._cursor_position.x
         ind_y = self._cursor_position.y
-        x = self._cursor_position.x * self.char_width
-        y = (self._cursor_position.y - self._buffer_display_offset) \
+        # if cursor is at the right edge of screen, display half of it
+        x = (ind_x if ind_x < self.row_len else (self.row_len - 0.5)) \
+            * self.char_width
+        y = (ind_y - self._buffer_display_offset) \
             * self.line_height + (self.line_height - self.char_height) \
             + int(0.2 * self.line_height)
 
@@ -740,7 +749,9 @@ class Terminal(QWidget):
 
         cy = (self._cursor_position.y - self._buffer_display_offset + 1) \
             * self.line_height
-        if self._buffer[ind_y][ind_x]:
+        if ind_x == self.row_len:  # cursor sitting at the edge of screen
+            pass
+        elif self._buffer[ind_y][ind_x]:
             qp.drawText(x, cy, self._buffer[ind_y][ind_x].char)
         else:
             qp.drawText(x, cy, " ")
@@ -894,6 +905,8 @@ class Terminal(QWidget):
 
         self._paint_buffer()
         self._restore_cursor_state()
+
+        self.resize_callback(col_len, row_len)
         # self._log_buffer()
 
     def write(self, text, pos: Position = None, set_cursor=False,
@@ -1243,7 +1256,7 @@ class Terminal(QWidget):
     def report_cursor_pos(self):
         x = self._cursor_position.x + 1
         y = self._cursor_position.y - self._buffer_display_offset + 1
-        self.stdin_callback(f"\x1b[{x};{y}R")
+        self.stdin_callback(f"\x1b[{y};{x}R")
 
     # ==========================
     #      USER INPUT EVENT
@@ -1279,9 +1292,7 @@ class Terminal(QWidget):
                 return True
             elif ret == -1:
                 self._tst_buf += chr(char)
-                if char == ControlChar.CR.value:
-                    self.set_cursor_position(0, self._cursor_position.y)
-                elif char == ControlChar.BS.value:
+                if char == ControlChar.BS.value:
                     self.backspace()
                 elif char == ControlChar.LF.value:
                     self.write_at_cursor("\n")
@@ -1342,7 +1353,7 @@ class Terminal(QWidget):
 
         if not modifiers:
             if key == Qt.Key_Enter or key == Qt.Key_Return:
-                self.input(ControlChar.LF.value)
+                self.input(ControlChar.CR.value)
                 return
             elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
                 self.input(ControlChar.BS.value)

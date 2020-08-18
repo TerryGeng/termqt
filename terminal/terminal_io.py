@@ -1,5 +1,8 @@
 import os
 import time
+import fcntl
+import struct
+import termios
 import select
 import signal
 import logging
@@ -35,9 +38,6 @@ class TerminalIO:
         # Spawn the sub-process in pty.
         import pty
         import shlex
-        import fcntl
-        import struct
-        import termios
 
         rows = self.rows
         cols = self.cols
@@ -47,7 +47,7 @@ class TerminalIO:
 
         if pid == 0:
             # we are in the sub-process (salve)
-            # stdin = 0
+            stdin = 0
             stdout = 1
             stderr = 2
             try:
@@ -64,6 +64,18 @@ class TerminalIO:
             env["LC_CTYPE"] = 'en_US.UTF-8'
             env["PYTHONIOENCODING"] = "utf_8"
 
+            attrs = termios.tcgetattr(stdout)
+            iflag, oflag, cflag, lflag, ispeed, ospeed, cc = attrs
+            oflag |= (termios.OPOST | termios.ONLCR | termios.INLCR)
+            attrs = [iflag, oflag, cflag, lflag, ispeed, ospeed, cc]
+            termios.tcsetattr(stdout, termios.TCSANOW, attrs)
+
+            attrs = termios.tcgetattr(stdin)
+            iflag, oflag, cflag, lflag, ispeed, ospeed, cc = attrs
+            oflag |= (termios.OPOST | termios.ONLCR | termios.INLCR)
+            attrs = [iflag, oflag, cflag, lflag, ispeed, ospeed, cc]
+            termios.tcsetattr(stdin, termios.TCSANOW, attrs)
+
             os.dup2(stderr, stdout)
             os.execvpe(cmd[0], cmd, env)
 
@@ -79,12 +91,21 @@ class TerminalIO:
 
             time.sleep(0.05)
             s = struct.pack("HHHH", rows, cols, 0, 0)
-            fcntl.ioctl(fd, termios.TIOCSWINSZ, s)
+            fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
             os.kill(self.pid, signal.SIGWINCH)
 
             threading.Thread(target=self._read_loop, daemon=True).start()
 
+    def resize(self, rows, cols):
+        self.cols = cols
+        self.rows = rows
+
+        s = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
+        os.kill(self.pid, signal.SIGWINCH)
+
     def write(self, buffer):
+        self.logger.info(f"stdin: " + str(buffer.encode('utf-8')))
         if not self.running:
             return
 
