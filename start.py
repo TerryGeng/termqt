@@ -1,10 +1,8 @@
 import logging
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLineEdit, \
-    QPushButton
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
 from PyQt5.QtCore import Qt, QCoreApplication
 
 from terminal import Terminal, TerminalIO
-
 
 if __name__ == "__main__":
     logger = logging.getLogger()
@@ -22,15 +20,9 @@ if __name__ == "__main__":
     window = QWidget()
     layout = QVBoxLayout()
     terminal = Terminal(400, 300, logger=logger)
-    button = QPushButton("Input \\x1b + text")
-    edit = QLineEdit()
 
     layout.addWidget(terminal)
-    layout.addWidget(edit)
-    layout.addWidget(button)
     window.setLayout(layout)
-
-    button.clicked.connect(lambda evt: terminal.stdout("\x1b" + edit.text()))
 
     window.show()
 
@@ -40,10 +32,10 @@ if __name__ == "__main__":
     terminal.stdin_callback = terminal_io.write
     terminal.resize_callback = terminal_io.resize
     terminal_io.spawn()
-    # f = open("typescript", "r")
+
     # def test():
     #     terminal.stdout(f.read())
-    #     terminal._log_screen()
+    #
     # import cProfile
     # cProfile.run('test()')
     app.exec_()
