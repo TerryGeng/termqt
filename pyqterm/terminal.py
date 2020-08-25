@@ -1,5 +1,4 @@
 import logging
-import time
 from copy import deepcopy
 from collections import deque
 from typing import NamedTuple
@@ -104,6 +103,7 @@ class EscapeProcessor:
         self._args = []
         self._arg_buf = ""
         self._cmd = ""
+        self._mark = ""
         self._buffer = ""
 
         self._esc_func = {}
@@ -422,7 +422,7 @@ class EscapeProcessor:
                 continue
 
             elif 30 <= arg <= 37 or 40 <= arg <= 47 or \
-                90 <= arg <= 97 or 100 <= arg <= 107:
+                    90 <= arg <= 97 or 100 <= arg <= 107:
                 if arg >= 90:
                     arg -= 60
                     arg1 = 1
@@ -464,7 +464,6 @@ class EscapeProcessor:
 
         self.set_style_cb(color, bg_color, bold, underline, reverse)
 
-
     def _csi_h_l_ext(self, on):
         arg = self._get_args(0, default=0)
         if arg == 0:
@@ -495,7 +494,6 @@ class Terminal(QWidget):
     # internal signal for triggering stdout routine for buffering and
     # painting. Note: Use stdout() method.
     _stdout_sig = pyqtSignal(bytes)
-
 
     def __init__(self, width, height, logger=None):
         super().__init__()
@@ -641,7 +639,7 @@ class Terminal(QWidget):
         self.logger.info(f"font: Font {info.family()} selected, character "
                          f"size {self.char_width}x{self.char_height}.")
 
-        self.row_len = int(self._width / self.char_width)    # Avoid "." inside the loop
+        self.row_len = int(self._width / self.char_width)
         self.col_len = int(self._height / self.line_height)
 
     def resizeEvent(self, event):
@@ -769,7 +767,8 @@ class Terminal(QWidget):
         self._fg_color = color if color else self._fg_color
         self._bg_color = bg_color if bg_color else self._bg_color
         self._bold = bool(bold) if bold != -1 else self._bold
-        self._underline = bool(underline) if underline != -1 else self._underline
+        self._underline = bool(underline) if underline != -1 else \
+            self._underline
         self._reversed = bool(reverse) if reverse != -1 else self._reversed
 
     # ==========================
@@ -915,7 +914,6 @@ class Terminal(QWidget):
         # _pos_ is position on the screen, not position on the buffer
 
         buf = self._buffer
-        old_cur_pos = None
 
         offset = len(self._buffer) - self.col_len
         row_len = self.row_len
@@ -927,8 +925,6 @@ class Terminal(QWidget):
         else:
             pos_x = pos.x
             pos_y = pos.y + offset
-
-        old_cur_pos = self._cursor_position
 
         color, bgcolor = self._fg_color, self._bg_color
         bold, underline, reverse = self._bold, self._underline, self._reversed
@@ -943,18 +939,13 @@ class Terminal(QWidget):
                 if pos_y == len(buf):
                     buf.append([None for x in range(self.row_len)])
                     self._line_wrapped_flags.append(False)
-                continue
+                if t.char == '\n':
+                    continue
+                else:
+                    self._line_wrapped_flags[pos_y - 1] = True
 
             buf[pos_y][pos_x] = t
             pos_x += 1
-
-            if pos_x > row_len:
-                pos_x = 0
-                pos_y += 1
-                if pos_y == len(buf):
-                    buf.append([None for x in range(self.row_len)])
-                    self._line_wrapped_flags.append(False)
-                self._line_wrapped_flags[pos_y - 1] = True
 
         if set_cursor:
             self._cursor_position = Position(pos_x, pos_y)
@@ -1137,7 +1128,6 @@ class Terminal(QWidget):
 
         self.toggle_alt_screen(on)
 
-
     # ==========================
     #       CURSOR CONTROL
     # ==========================
@@ -1190,7 +1180,6 @@ class Terminal(QWidget):
         self._switch_cursor_blink(self._cursor_blinking_state, True)
 
     def set_cursor_position(self, x, y):
-        old_cur_pos = self._cursor_position
         self._cursor_position = Position(
             *self._move_screen_with_pos(x, y)
         )
@@ -1313,7 +1302,7 @@ class Terminal(QWidget):
             return False
 
         except ValueError as e:
-            self.logger.exception(e)
+            self.logger.debug(e)
 
     def input(self, char):
         if isinstance(char, bytes):

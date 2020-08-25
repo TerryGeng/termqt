@@ -83,6 +83,7 @@ class TerminalIO:
             # we are still in this process (master)
             self.fd = fd
             self.pid = pid
+            self.logger.info(f"Pty spawned, fd: {fd}, pid: {pid}")
             self.running = True
             # set unblocking flag to keep read(size) return even when there
             # the length of available data is less than size.
