@@ -790,8 +790,9 @@ class Terminal(QWidget):
 
         row_len = int(width / self.char_width)    # Avoid "." inside the loop
         col_len = int(height / self.line_height)
-        old_cur_x = cur_x = self._cursor_position.x
-        old_cur_y = cur_y = self._cursor_position.y
+
+        cur_x = self._cursor_position.x
+        cur_y = self._cursor_position.y
 
         if self._buffer:
             old_row_len = self.row_len
@@ -803,8 +804,17 @@ class Terminal(QWidget):
                     for i in range(filler):
                         self._buffer.appendleft([None for x in range(row_len)])
                         self._line_wrapped_flags.appendleft(False)
+                    cur_y += filler
+                    self._cursor_position = Position(cur_x, cur_y)
+
                 self._buffer_lock.unlock()
+                self.resize_callback(col_len, row_len)
                 return
+
+            displayed_auto_breaks = 0
+            for i in range(self._buffer_display_offset, cur_y):
+                if self._line_wrapped_flags[i]:
+                    displayed_auto_breaks += 1
 
             self.logger.info(f"screen: resize triggered, new size ({row_len}x"
                              f"{col_len})")
@@ -851,8 +861,6 @@ class Terminal(QWidget):
                     # under which we should avoid an extra line break being
                     # inserted
                     breaked = False
-                    if old_cur_x == x and old_cur_y == y:
-                        cur_x, cur_y = new_x, new_y
 
                     _new_buffer[new_y][new_x] = c
 
@@ -885,6 +893,14 @@ class Terminal(QWidget):
                 for i in range(filler):
                     _new_buffer.appendleft([None for x in range(row_len)])
                     _new_wrap.appendleft(False)
+
+            new_displayed_auto_breaks = 0
+            for i in range(len(_new_buffer) - col_len, cur_y):
+                if _new_wrap[i]:
+                    new_displayed_auto_breaks += 1
+
+            print(new_displayed_auto_breaks - displayed_auto_breaks)
+            cur_y += (new_displayed_auto_breaks - displayed_auto_breaks)
         else:
             self.logger.info(f"screen: resize triggered, buffer created, "
                              f"new size ({row_len}x{col_len})")
@@ -899,7 +915,7 @@ class Terminal(QWidget):
         self._buffer_display_offset = len(self._buffer) - self.col_len
         self._line_wrapped_flags = _new_wrap
         # self.logger.info(f"cursor: ({cur_x}, {cur_y})")
-        self._cursor_position = Position(cur_x, cur_y)
+        self._cursor_position = Position(min(cur_x, row_len), cur_y)
 
         self._buffer_lock.unlock()
 
@@ -907,11 +923,13 @@ class Terminal(QWidget):
         self._restore_cursor_state()
 
         self.resize_callback(col_len, row_len)
-        # self._log_buffer()
+        self._log_buffer()
 
     def write(self, text, pos: Position = None, set_cursor=False,
               reset_offset=True):
         # _pos_ is position on the screen, not position on the buffer
+
+        self._buffer_lock.lock()
 
         buf = self._buffer
 
@@ -953,6 +971,8 @@ class Terminal(QWidget):
         if reset_offset:
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,
                                               self._cursor_position.y)
+
+        self._buffer_lock.unlock()
         # self._log_buffer()
         # self._paint_buffer()
         # (leave repaint event to cursor)
@@ -1036,6 +1056,7 @@ class Terminal(QWidget):
         if pos_x < 0:
             pos_x = self.row_len - 1
             pos_y -= 1
+            self._line_wrapped_flags[pos_y] = False
 
         if pos_y < 0:
             pos_x, pos_y = 0, 0
@@ -1260,6 +1281,7 @@ class Terminal(QWidget):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
+        print(string)
         self._stdout_sig.emit(string)
 
     def _stdout(self, string: bytes):
