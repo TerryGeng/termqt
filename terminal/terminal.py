@@ -494,7 +494,7 @@ class Terminal(QWidget):
 
     # internal signal for triggering stdout routine for buffering and
     # painting. Note: Use stdout() method.
-    _stdout_sig = pyqtSignal(str)
+    _stdout_sig = pyqtSignal(bytes)
 
 
     def __init__(self, width, height, logger=None):
@@ -595,7 +595,8 @@ class Terminal(QWidget):
         ep.erase_line_cb = self.erase_line
         ep.set_cursor_abs_position_cb = self.set_cursor_position
         ep.set_cursor_rel_position_cb = self.set_cursor_rel_pos
-        ep.report_device_status_cb = lambda: self.stdin_callback("\x1b[0n")
+        ep.report_device_status_cb = lambda: self.stdin_callback(
+            "\x1b[0n".encode("utf-8"))
         ep.report_cursor_position_cb = self.report_cursor_pos
         ep.set_style_cb = self.set_style
         ep.use_alt_buffer = self.toggle_alt_screen
@@ -1256,7 +1257,7 @@ class Terminal(QWidget):
     def report_cursor_pos(self):
         x = self._cursor_position.x + 1
         y = self._cursor_position.y - self._buffer_display_offset + 1
-        self.stdin_callback(f"\x1b[{y};{x}R")
+        self.stdin_callback(f"\x1b[{y};{x}R".encode("utf-8"))
 
     # ==========================
     #      USER INPUT EVENT
@@ -1266,24 +1267,24 @@ class Terminal(QWidget):
     #    self._input_buffer_cursor = 0
     #    self._input_buffer = ''
 
-    def stdout(self, string):
+    def stdout(self, string: bytes):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
         self._stdout_sig.emit(string)
 
-    def _stdout(self, string):
+    def _stdout(self, string: bytes):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
         need_draw = False
         for char in string:
-            need_draw = self._stdout_char(ord(char)) or need_draw
+            need_draw = self._stdout_char(char) or need_draw
         if need_draw:
             self._paint_buffer()
             self.repaint()
 
-    def _stdout_char(self, char):
+    def _stdout_char(self, char: int):
         # ret: need_draw
         try:
             # self.clear_input_buffer()
@@ -1315,7 +1316,10 @@ class Terminal(QWidget):
             self.logger.exception(e)
 
     def input(self, char):
-        self.stdin_callback(chr(char))
+        if isinstance(char, bytes):
+            self.stdin_callback(char)
+        elif isinstance(char, int):
+            self.stdin_callback(bytes([char]))
 
         # naive implementation for cooked mode of the terminal
         # use it if you don't want to use system's cooked mode
@@ -1381,4 +1385,4 @@ class Terminal(QWidget):
             return
 
         if text:
-            self.input(ord(text))
+            self.input(text.encode('utf-8'))

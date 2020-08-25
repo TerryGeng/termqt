@@ -32,7 +32,7 @@ class TerminalIO:
         self._read_buf = b""
 
         self.terminated_callback = lambda: None
-        self.stdout_callback = lambda: None
+        self.stdout_callback = lambda bs: None
 
     def spawn(self):
         # Spawn the sub-process in pty.
@@ -94,23 +94,26 @@ class TerminalIO:
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
             os.kill(self.pid, signal.SIGWINCH)
 
-            threading.Thread(target=self._read_loop, daemon=True).start()
+            threading.Thread(name="TerminalIO Read Loop",
+                             target=self._read_loop, daemon=True).start()
 
     def resize(self, rows, cols):
         self.cols = cols
         self.rows = rows
 
+        self.logger.info(f"Terminal resize trigger: {cols}x{rows}")
+
         s = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
         os.kill(self.pid, signal.SIGWINCH)
 
-    def write(self, buffer):
-        self.logger.info(f"stdin: " + str(buffer.encode('utf-8')))
+    def write(self, buffer: bytes):
+        self.logger.info("stdin: " + str(buffer))
         if not self.running:
             return
 
         try:
-            assert os.write(self.fd, buffer.encode('utf-8')) == len(buffer)
+            assert os.write(self.fd, buffer) == len(buffer)
         except (OSError, AssertionError):
             self.running = False
             self.terminated_callback()
@@ -120,7 +123,7 @@ class TerminalIO:
         # read loop to be run in a separated thread
         fd = self.fd
         poll = select.poll()
-        poll.register(fd, select.POLLIN)
+        poll.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
 
         try:
             while self.running:
@@ -130,8 +133,14 @@ class TerminalIO:
                 buf = os.read(fd, 1032)
                 # 1032 % 4 == 1032 % 3 == 0, avoid truncating utf-8 char
 
-                self.stdout_callback(buf.decode('utf-8'))
+                if len(buf) == 0:
+                    break
+
+                self.stdout_callback(buf)
         except OSError:
+            pass
+        finally:
+            self.logger.info("Spawned process has been killed")
             if self.running:
                 self.running = False
                 self.terminated_callback()
