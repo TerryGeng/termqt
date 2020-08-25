@@ -115,6 +115,7 @@ class EscapeProcessor:
         self._csi_func['J'] = self._csi_J
         self._csi_func['H'] = self._csi_H
         self._csi_func['K'] = self._csi_K
+        self._csi_func['P'] = self._csi_P
         self._csi_func['K'] = self._csi_K
         self._csi_func['A'] = self._csi_A
         self._csi_func['B'] = self._csi_B
@@ -374,6 +375,9 @@ class EscapeProcessor:
     def _csi_K(self):
         # EL – Erase In Line
         self.erase_line_cb(self._get_args(0, default=0))
+
+    def _csi_P(self):
+        self.erase_line_cb(0)
 
     def _csi_H(self):
         # CUP – Cursor Position
@@ -899,7 +903,6 @@ class Terminal(QWidget):
                 if _new_wrap[i]:
                     new_displayed_auto_breaks += 1
 
-            print(new_displayed_auto_breaks - displayed_auto_breaks)
             cur_y += (new_displayed_auto_breaks - displayed_auto_breaks)
         else:
             self.logger.info(f"screen: resize triggered, buffer created, "
@@ -1047,28 +1050,15 @@ class Terminal(QWidget):
 
     def delete_at_cursor(self):
         pos = self._cursor_position
+        self._log_buffer()
         self._buffer_lock.lock()
         pos_x = pos.x
         pos_y = pos.y
 
-        # locate character to delete
-        pos_x -= 1
-        if pos_x < 0:
-            pos_x = self.row_len - 1
-            pos_y -= 1
-            self._line_wrapped_flags[pos_y] = False
-
-        if pos_y < 0:
-            pos_x, pos_y = 0, 0
-        else:
-            while pos_x > 0 and not self._buffer[pos_y][pos_x]:
-                pos_x -= 1
-
-        if pos_y < self._buffer_display_offset:
-            self._buffer_display_offset = pos_y
-
-        self._cursor_position = Position(pos_x, pos_y)
+        self._buffer[pos_y][pos_x] = None
         self._buffer_lock.unlock()
+
+        self._log_buffer()
 
     def erase_display(self, mode=2):
         buf = self._buffer
@@ -1281,7 +1271,6 @@ class Terminal(QWidget):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
-        print(string)
         self._stdout_sig.emit(string)
 
     def _stdout(self, string: bytes):
@@ -1366,15 +1355,33 @@ class Terminal(QWidget):
         modifiers = event.modifiers()
         text = event.text()
 
+        while True:
+            # This is a one-shot loop, because I want to use 'break'
+            # to jump out of this block
+            if key == Qt.Key_Up:
+                self.input(b'\x1b[A')
+            elif key == Qt.Key_Down:
+                self.input(b'\x1b[B')
+            elif key == Qt.Key_Right:
+                self.input(b'\x1b[C')
+            elif key == Qt.Key_Left:
+                self.input(b'\x1b[D')
+            else:
+                break
+            return
+
         if not modifiers:
-            if key == Qt.Key_Enter or key == Qt.Key_Return:
-                self.input(ControlChar.CR.value)
-                return
-            elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
-                self.input(ControlChar.BS.value)
-                return
-            elif key == Qt.Key_Escape:
-                self.input(ControlChar.ESC.value)
+            while True:
+                # This is a one-shot loop, because I want to use 'break'
+                # to jump out of this block
+                if key == Qt.Key_Enter or key == Qt.Key_Return:
+                    self.input(ControlChar.CR.value)
+                elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
+                    self.input(ControlChar.BS.value)
+                elif key == Qt.Key_Escape:
+                    self.input(ControlChar.ESC.value)
+                else:
+                    break
                 return
         elif modifiers == Qt.ControlModifier:
             if text == 'c':
