@@ -15,6 +15,7 @@ from .colors import colors8, colors16, colors256
 
 DEFAULT_FG_COLOR = Qt.white
 DEFAULT_BG_COLOR = Qt.black
+PADDING = 4
 
 
 class ControlChar(Enum):
@@ -508,12 +509,12 @@ class Terminal(QWidget):
         # we paint everything to the pixmap first then paint this pixmap
         # on paint event. This allows us to partially update the canvas.
         self._canvas = QPixmap(width, height)
-        self._painter_lock = QMutex()
+        self._painter_lock = QMutex(QMutex.Recursive)
 
         # initialize a buffer to store all characters to display
         # define in _resize()_ as a deque
         self._buffer = None
-        self._buffer_lock = QMutex()
+        self._buffer_lock = QMutex(QMutex.Recursive)
         # used to store the line number of lines that are wrapped automatically
         # in order to behave correctly when resizing the widget.
         self._line_wrapped_flags = None
@@ -657,7 +658,7 @@ class Terminal(QWidget):
         self._painter_lock.lock()
         _qp = QPainter(self)
         _qp.setRenderHint(QPainter.Antialiasing)
-        _qp.drawPixmap(0, 0, self._canvas)
+        _qp.drawPixmap(int(PADDING)/2, int(PADDING)/2, self._canvas)
         super().paintEvent(event)
         self._painter_lock.unlock()
 
@@ -792,8 +793,8 @@ class Terminal(QWidget):
 
         self._buffer_lock.lock()
 
-        row_len = int(width / self.char_width)    # Avoid "." inside the loop
-        col_len = int(height / self.line_height)
+        row_len = int((width - PADDING) / self.char_width)
+        col_len = int((height - PADDING) / self.line_height)
 
         cur_x = self._cursor_position.x
         cur_y = self._cursor_position.y
@@ -803,7 +804,7 @@ class Terminal(QWidget):
             old_buf_col_len = len(self._buffer)
 
             if old_row_len == row_len:
-                filler = col_len - len(self._buffer)
+                filler = col_len - old_buf_col_len
                 if filler > 0:
                     for i in range(filler):
                         self._buffer.appendleft([None for x in range(row_len)])
@@ -811,14 +812,16 @@ class Terminal(QWidget):
                     cur_y += filler
                     self._cursor_position = Position(cur_x, cur_y)
 
+                self.col_len = col_len
+                self._buffer_display_offset = len(self._buffer) - self.col_len
                 self._buffer_lock.unlock()
                 self.resize_callback(col_len, row_len)
                 return
 
-            displayed_auto_breaks = 0
-            for i in range(self._buffer_display_offset, cur_y):
+            auto_breaks = 0
+            for i in range(cur_y):
                 if self._line_wrapped_flags[i]:
-                    displayed_auto_breaks += 1
+                    auto_breaks += 1
 
             self.logger.info(f"screen: resize triggered, new size ({row_len}x"
                              f"{col_len})")
@@ -891,19 +894,21 @@ class Terminal(QWidget):
                             # set the flag for a new auto-line wrap.
                             _new_wrap[new_y-1] = True
 
-            filler = col_len - len(_new_buffer)
+            filler = old_buf_col_len - len(_new_buffer)
             if filler > 0:
                 cur_y += filler
-                for i in range(filler):
-                    _new_buffer.appendleft([None for x in range(row_len)])
-                    _new_wrap.appendleft(False)
 
-            new_displayed_auto_breaks = 0
-            for i in range(len(_new_buffer) - col_len, cur_y):
+            for i in range(filler):
+                _new_buffer.appendleft([None for x in range(row_len)])
+                _new_wrap.appendleft(False)
+
+            new_auto_breaks = 0
+            for i in range(min(cur_y, len(_new_buffer)-1)):
                 if _new_wrap[i]:
-                    new_displayed_auto_breaks += 1
+                    new_auto_breaks += 1
 
-            cur_y += (new_displayed_auto_breaks - displayed_auto_breaks)
+            cur_y += (new_auto_breaks - auto_breaks)
+
         else:
             self.logger.info(f"screen: resize triggered, buffer created, "
                              f"new size ({row_len}x{col_len})")
@@ -1277,9 +1282,11 @@ class Terminal(QWidget):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
+        self._buffer_lock.lock()
         need_draw = False
         for char in string:
             need_draw = self._stdout_char(char) or need_draw
+        self._buffer_lock.unlock()
         if need_draw:
             self._paint_buffer()
             self.repaint()
