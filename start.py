@@ -2,7 +2,7 @@ import logging
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
 from PyQt5.QtCore import Qt, QCoreApplication
 
-from pyqterm import Terminal, TerminalIO
+from pyqterm import Terminal, TerminalExecIO
 
 if __name__ == "__main__":
     logger = logging.getLogger()
@@ -26,8 +26,8 @@ if __name__ == "__main__":
 
     window.show()
 
-    terminal_io = TerminalIO(terminal.row_len, terminal.col_len,
-                             "/bin/bash", logger=logger)
+    terminal_io = TerminalExecIO(terminal.row_len, terminal.col_len,
+                                 "/bin/bash", logger=logger)
     terminal_io.stdout_callback = terminal.stdout
     terminal.stdin_callback = terminal_io.write
     terminal.resize_callback = terminal_io.resize

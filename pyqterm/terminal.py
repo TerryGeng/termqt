@@ -926,7 +926,7 @@ class Terminal(QWidget):
         self._restore_cursor_state()
 
         self.resize_callback(col_len, row_len)
-        self._log_buffer()
+        # self._log_buffer()
 
     def write(self, text, pos: Position = None, set_cursor=False,
               reset_offset=True):
@@ -1367,7 +1367,7 @@ class Terminal(QWidget):
             elif key == Qt.Key_Left:
                 self.input(b'\x1b[D')
             else:
-                break
+                break  # avoid the execution of 'return'
             return
 
         if not modifiers:
@@ -1381,7 +1381,7 @@ class Terminal(QWidget):
                 elif key == Qt.Key_Escape:
                     self.input(ControlChar.ESC.value)
                 else:
-                    break
+                    break  # avoid the execution of 'return'
                 return
         elif modifiers == Qt.ControlModifier:
             if text == 'c':

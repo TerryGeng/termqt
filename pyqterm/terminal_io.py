@@ -7,13 +7,14 @@ import select
 import signal
 import logging
 import threading
+from abc import ABC, abstractmethod
 
 
-class TerminalIO:
+class TerminalIO(ABC):
     # This class provides io functions that communciate with the Terminal
     # and the pty (pseudo-tty) of a program.
 
-    def __init__(self, cols: int, rows: int, cmd: str, env=None, logger=None):
+    def __init__(self, cols: int, rows: int, logger=None):
         # Initilize.
         #
         # args: cols: columns
@@ -23,8 +24,6 @@ class TerminalIO:
         self.logger = logger if logger else logging.getLogger()
         self.cols = cols
         self.rows = rows
-        self.cmd = cmd
-        self.env = env if env else os.environ
         self.pid = -1
         self.fd = -1
         self.running = False
@@ -37,12 +36,7 @@ class TerminalIO:
     def spawn(self):
         # Spawn the sub-process in pty.
         import pty
-        import shlex
 
-        rows = self.rows
-        cols = self.cols
-        env = self.env
-        cmd = shlex.split(self.cmd)
         pid, fd = pty.fork()
 
         if pid == 0:
@@ -55,14 +49,6 @@ class TerminalIO:
                 os.closerange(3, 256)
             except OSError:
                 pass
-
-            env = self.env
-            env["COLUMNS"] = str(cols)
-            env["LINES"] = str(rows)
-            env["TERM"] = env.get("TERM", "xterm-256color")
-            env["LANG"] = 'en_US.UTF-8'
-            env["LC_CTYPE"] = 'en_US.UTF-8'
-            env["PYTHONIOENCODING"] = "utf_8"
 
             attrs = termios.tcgetattr(stdout)
             iflag, oflag, cflag, lflag, ispeed, ospeed, cc = attrs
@@ -77,7 +63,7 @@ class TerminalIO:
             termios.tcsetattr(stdin, termios.TCSANOW, attrs)
 
             os.dup2(stderr, stdout)
-            os.execvpe(cmd[0], cmd, env)
+            self.run_slave()
 
         else:
             # we are still in this process (master)
@@ -91,22 +77,34 @@ class TerminalIO:
             fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
             time.sleep(0.05)
-            s = struct.pack("HHHH", rows, cols, 0, 0)
+            s = struct.pack("HHHH", self.rows, self.cols, 0, 0)
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
             os.kill(self.pid, signal.SIGWINCH)
 
             threading.Thread(name="TerminalIO Read Loop",
                              target=self._read_loop, daemon=True).start()
 
+    @abstractmethod
+    def run_slave(self):
+        # This method will be executed in the child process.
+        # If you want to invoke an interactive shell or a program,
+        # please start it here.
+        # See TerminalExecIO for example.
+        pass
+
     def resize(self, rows, cols):
-        self.cols = cols
-        self.rows = rows
+        try:
+            self.cols = cols
+            self.rows = rows
 
-        self.logger.info(f"Terminal resize trigger: {cols}x{rows}")
+            self.logger.info(f"Terminal resize trigger: {cols}x{rows}")
 
-        s = struct.pack("HHHH", rows, cols, 0, 0)
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
-        os.kill(self.pid, signal.SIGWINCH)
+            s = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
+            os.kill(self.pid, signal.SIGWINCH)
+        except (OSError, AssertionError):
+            self.running = False
+            self.terminated_callback()
 
     def write(self, buffer: bytes):
         self.logger.info("stdin: " + str(buffer))
@@ -118,7 +116,6 @@ class TerminalIO:
         except (OSError, AssertionError):
             self.running = False
             self.terminated_callback()
-            os.close(self.fd)
 
     def _read_loop(self):
         # read loop to be run in a separated thread
@@ -166,3 +163,30 @@ class TerminalIO:
         except OSError:
             self.running = False
             return False
+
+
+class TerminalExecIO(TerminalIO):
+    def __init__(self, cols: int, rows: int, cmd: str, env=None, logger=None):
+        # Initilize.
+        #
+        # args: cols: columns
+        #       rows: rows
+        #       cmd: the command to execute.
+        #       env: environment variables, if None, set it to os.environ
+        super().__init__(cols, rows, logger)
+        self.cmd = cmd
+        self.env = env if env else os.environ
+
+    def run_slave(self):
+        import shlex
+        cmd = shlex.split(self.cmd)
+
+        env = self.env
+        env["COLUMNS"] = str(self.cols)
+        env["LINES"] = str(self.rows)
+        env["TERM"] = env.get("TERM", "xterm-256color")
+        env["LANG"] = 'en_US.UTF-8'
+        env["LC_CTYPE"] = 'en_US.UTF-8'
+        env["PYTHONIOENCODING"] = "utf_8"
+
+        os.execvpe(cmd[0], cmd, self.env)
