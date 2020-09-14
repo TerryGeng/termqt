@@ -20,13 +20,32 @@ PADDING = 4
 
 class ControlChar(Enum):
     NUL = 0   # Ctrl-@, null
+    SOH = 1   # Ctrl-A, start of heading
+    STX = 2   # Ctrl-B, start of text, bash shortcut for left arrow key
     ETX = 3   # Ctrl-C, end of text
-    EOT = 4   # Ctrl-D, end of transmit
-    BEL = 7   # Ctrl-G, bell
+    EOT = 4   # Ctrl-D, end of transmit, bash shortcut for delete
+    ENQ = 5   # Ctrl-E, enquiry, bash shortcut for end of line
+    ACK = 6   # Ctrl-F, acknowledge, bash shortcut for right arrow key
+    BEL = 7   # Ctrl-G, bell, bash shortcut for leave history search
     BS = 8    # Ctrl-H, backspace
     TAB = 9   # Ctrl-I, tab
     LF = 10   # Ctrl-J, NL line feed, new line
+    VT = 11   # Ctrl-K, vertical tab, bash shortcut for cut after cursor
+    FF = 12   # Ctrl-L, from feed, bash shortcut for clear
     CR = 13   # Ctrl-M, carriage return
+    SO = 14   # Ctrl-N, shift out, bash shortcut for go down in history
+    SI = 15   # Ctrl-O, shift in, bash shortcut for run command
+    DLE = 16  # Ctrl-P, data line escape, bash shortcut for go up in history
+    DC1 = 17  # Ctrl-Q, device control 1, bash shortcut for resume output
+    DC2 = 18  # Ctrl-R, device control 2, bash shortcut for search history
+    DC3 = 19  # Ctrl-S, device control 3, bash shortcut for suspend output
+    DC4 = 20  # Ctrl-T, device control 4, bash shortcut for swap character
+    NAK = 21  # Ctrl-U, negative acknowledge, bash shortcut for cut before cursor
+    SYN = 22  # Ctrl-V
+    ETB = 23  # Ctrl-W, end of xmit block, bash shortcut for cut the word before cursor
+    CAN = 24  # Ctrl-X, cancel
+    EM = 25,  # Ctrl-Y, end of medium, bash shortcut for paste
+    SUB = 26  # Ctrl-Z, substitute
     ESC = 27  # Ctrl-[, escape
 
 
@@ -1390,22 +1409,60 @@ class Terminal(QWidget):
                 else:
                     break  # avoid the execution of 'return'
                 return
-        elif modifiers == Qt.ControlModifier:
-            if text == 'c':
+        elif modifiers == Qt.ControlModifier or modifiers == Qt.MetaModifier:
+            if key == Qt.Key_A:
+                self.input(ControlChar.SOH.value)
+            elif key == Qt.Key_B:
+                self.input(ControlChar.STX.value)
+            elif key == Qt.Key_C:
                 self.input(ControlChar.ETX.value)
-            elif text == 'd':
+            elif key == Qt.Key_D:
                 self.input(ControlChar.EOT.value)
-            elif text == 'g':
+            elif key == Qt.Key_E:
+                self.input(ControlChar.ENQ.value)
+            elif key == Qt.Key_F:
+                self.input(ControlChar.ACK.value)
+            elif key == Qt.Key_G:
                 self.input(ControlChar.BEL.value)
-            elif text == 'h':
+            elif key == Qt.Key_H:
                 self.input(ControlChar.BS.value)
-            elif text == 'i':
+            elif key == Qt.Key_I:
                 self.input(ControlChar.TAB.value)
-            elif text == 'j':
+            elif key == Qt.Key_J:
                 self.input(ControlChar.LF.value)
-            elif text == 'm':
+            elif key == Qt.Key_K:
+                self.input(ControlChar.VT.value)
+            elif key == Qt.Key_L:
+                self.input(ControlChar.FF.value)
+            elif key == Qt.Key_M:
                 self.input(ControlChar.CR.value)
-            elif text == '[':
+            elif key == Qt.Key_N:
+                self.input(ControlChar.SO.value)
+            elif key == Qt.Key_O:
+                self.input(ControlChar.SI.value)
+            elif key == Qt.Key_P:
+                self.input(ControlChar.DLE.value)
+            elif key == Qt.Key_Q:
+                self.input(ControlChar.DC1.value)
+            elif key == Qt.Key_R:
+                self.input(ControlChar.DC2.value)
+            elif key == Qt.Key_S:
+                self.input(ControlChar.DC3.value)
+            elif key == Qt.Key_T:
+                self.input(ControlChar.DC4.value)
+            elif key == Qt.Key_U:
+                self.input(ControlChar.NAK.value)
+            elif key == Qt.Key_V:
+                self.input(ControlChar.SYN.value)
+            elif key == Qt.Key_W:
+                self.input(ControlChar.ETB.value)
+            elif key == Qt.Key_X:
+                self.input(ControlChar.CAN.value)
+            elif key == Qt.Key_Y:
+                self.input(ControlChar.EM.value)
+            elif key == Qt.Key_Z:
+                self.input(ControlChar.SUB.value)
+            elif key == Qt.Key_BracketLeft:
                 self.input(ControlChar.ESC.value)
             return
 

@@ -97,7 +97,7 @@ class TerminalIO(ABC):
             self.cols = cols
             self.rows = rows
 
-            self.logger.info(f"Terminal resize trigger: {cols}x{rows}")
+            self.logger.debug(f"Terminal resize trigger: {cols}x{rows}")
 
             s = struct.pack("HHHH", rows, cols, 0, 0)
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ, s)
@@ -107,7 +107,7 @@ class TerminalIO(ABC):
             self.terminated_callback()
 
     def write(self, buffer: bytes):
-        self.logger.info("stdin: " + str(buffer))
+        self.logger.debug("stdin: " + str(buffer))
         if not self.running:
             return
 
