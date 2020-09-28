@@ -707,6 +707,10 @@ class Terminal(QWidget):
         qp.fillRect(self.rect(), DEFAULT_BG_COLOR)
 
         for ln in range(self.col_len):
+            real_ln = ln + offset
+            if real_ln < 0 or real_ln >= len(self._buffer):
+                break
+
             row = self._buffer[ln + offset]
 
             ht += lh
