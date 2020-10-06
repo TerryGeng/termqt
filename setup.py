@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="pyqterm",
+    name="termqt",
     version="0.1",
     packages=find_packages(),
 
@@ -9,7 +9,7 @@ setup(
     author_email="terry@terriex.com",
     description="A terminal emulator widget built on PyQt5.",
     keywords="terminal emulator pyqt",
-    url="https://github.com/TerryGeng/pyqterm",
+    url="https://github.com/TerryGeng/termqt",
     classifiers=[
         "Environment :: X11 Applications :: Qt",
         "Operating System :: POSIX",

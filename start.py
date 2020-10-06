@@ -2,7 +2,7 @@ import logging
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
 from PyQt5.QtCore import Qt, QCoreApplication
 
-from pyqterm import Terminal, TerminalExecIO
+from termqt import Terminal, TerminalExecIO
 
 if __name__ == "__main__":
     logger = logging.getLogger()
