@@ -1,8 +1,6 @@
 import os
 import time
-import fcntl
 import struct
-import termios
 import select
 import signal
 import logging
@@ -36,6 +34,8 @@ class TerminalIO(ABC):
     def spawn(self):
         # Spawn the sub-process in pty.
         import pty
+        import fcntl
+        import termios
 
         pid, fd = pty.fork()
 
@@ -94,6 +94,8 @@ class TerminalIO(ABC):
 
     def resize(self, rows, cols):
         try:
+            import fcntl
+            import termios
             self.cols = cols
             self.rows = rows
 
