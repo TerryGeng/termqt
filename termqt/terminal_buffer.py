@@ -1,21 +1,16 @@
-import logging
 from copy import deepcopy
-from collections import deque
 from typing import NamedTuple
 from enum import Enum
 from functools import partial
+from collections import deque
 
-from PyQt5.QtWidgets import QWidget
-from PyQt5.QtGui import QPainter, QColor, QPalette, QFontDatabase, QPen, \
-    QFont, QFontInfo, QFontMetrics, QPixmap
-from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
+from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, QMutex
 
 from .colors import colors8, colors16, colors256
 
-
 DEFAULT_FG_COLOR = Qt.white
 DEFAULT_BG_COLOR = Qt.black
-PADDING = 4
 
 
 class ControlChar(Enum):
@@ -61,12 +56,6 @@ class Char(NamedTuple):
 class Position(NamedTuple):
     x: int
     y: int
-
-
-class CursorState(Enum):
-    ON = 1
-    OFF = 2
-    UNFOCUSED = 3
 
 
 class EscapeProcessor:
@@ -191,8 +180,7 @@ class EscapeProcessor:
         #      color, bgcolor is QColor, None means unspecified,
         #      the other three flags: -1 means unspecified,
         #        0 means false, 1 means true
-        self.set_style_cb = lambda color, bgcolor, bold, \
-            underlined, reverse: None
+        self.set_style_cb = lambda color, bgcolor, bold, underlined, reverse: None
 
         # Save Cursor Position
         #  save cursor position and current style
@@ -498,37 +486,9 @@ class EscapeProcessor:
             self.save_cursor_use_alt_buffer(on)
 
 
-class Terminal(QWidget):
-
-    # Terminal widget.
-    # Note: One should not call functions that begin with _, especially those
-    #       linking with painting things.
-    #       It is DANGEROUS to call internal painting function outside the main
-    #       thread, Qt will crash immediately. Just don't do that.
-
-    # signal for triggering a on-canvas buffer repaint
-    buffer_repaint_sig = pyqtSignal()
-
-    # signal for triggering a on-canvas cursor repaint
-    cursor_repaint_sig = pyqtSignal()
-
-    # signal for triggering a repaint for both the canvas and the widget
-    total_repaint_sig = pyqtSignal()
-
-    # internal signal for triggering stdout routine for buffering and
-    # painting. Note: Use stdout() method.
-    _stdout_sig = pyqtSignal(bytes)
-
-    def __init__(self, width, height, logger=None):
-        super().__init__()
-
-        self.logger = logger if logger else logging.getLogger()
-        self.logger.info("Initializing Terminal...")
-
-        # we paint everything to the pixmap first then paint this pixmap
-        # on paint event. This allows us to partially update the canvas.
-        self._canvas = QPixmap(width, height)
-        self._painter_lock = QMutex(QMutex.Recursive)
+class TerminalBuffer:
+    def __init__(self, row_len=0, col_len=0, logger=None):
+        self.logger = logger
 
         # initialize a buffer to store all characters to display
         # define in _resize()_ as a deque
@@ -554,35 +514,11 @@ class Terminal(QWidget):
         self._underline = False
         self._reversed = False
 
-        self._width = width
-        self._height = height
+        self.row_len = row_len
+        self.col_len = col_len
 
-        self.font = None
-        self.char_width = None
-        self.char_height = None
-        self.line_height = None
-        self.row_len = None  # Guess what? The number of rows is col_len,
-        self.col_len = None  # the number of columns is row_len
-        self.dpr = self.devicePixelRatioF()
-
-        self.set_bg(DEFAULT_BG_COLOR)
-        self.set_fg(DEFAULT_FG_COLOR)
-        self.set_font()
-        self.setAutoFillBackground(True)
-        self.setMinimumSize(width, height)
-
-        # connect reapint signals
-        self.buffer_repaint_sig.connect(self._paint_buffer)
-        self.cursor_repaint_sig.connect(self._paint_cursor)
-        self.total_repaint_sig.connect(self._canvas_repaint)
-
-        # intializing blinking cursor
-        self._cursor_blinking_lock = QMutex()
-        self._cursor_blinking_state = CursorState.ON
-        self._cursor_blinking_elapse = 0
-        self._cursor_blinking_timer = QTimer()
-        self._cursor_blinking_timer.timeout.connect(self._blink_cursor)
-        self._switch_cursor_blink(state=CursorState.ON, blink=True)
+        self._bg_color = DEFAULT_BG_COLOR
+        self._fg_color = DEFAULT_FG_COLOR
 
         # initialize alternative screen buffer, which is a xterm feature.
         # when activating alternative buffer, normal buffer will be saved in
@@ -593,13 +529,9 @@ class Terminal(QWidget):
         self._alt_buffer_display_offset = None
         self._alt_cursor_position = Position(0, 0)
 
-        self.setFocusPolicy(Qt.StrongFocus)
-
         # terminal options, in case you don't want pty to handle it
         # self.echo = True
         # self.canonical_mode = True
-
-        self._stdout_sig.connect(self._stdout)
 
         # escape sequence processor
         self.escape_processor = EscapeProcessor(logger)
@@ -608,6 +540,8 @@ class Terminal(QWidget):
         # callbacks
         self.stdin_callback = lambda t: print(t)
         self.resize_callback = lambda rows, cols: None
+
+        self.create_buffer(row_len, col_len)
 
         self._tst_buf = ""
 
@@ -627,169 +561,8 @@ class Terminal(QWidget):
     def set_bg(self, color: QColor):
         self._bg_color = color
 
-        pal = self.palette()
-        pal.setColor(QPalette.Background, color)
-        self.setPalette(pal)
-
     def set_fg(self, color: QColor):
         self._fg_color = color
-        pal = self.palette()
-        pal.setColor(QPalette.Foreground, color)
-        self.setPalette(pal)
-
-    def set_font(self, font: QFont = None):
-        qfd = QFontDatabase()
-
-        if font:
-            info = QFontInfo(font)
-            if info.styleHint() != QFont.Monospace:
-                self.logger.warning("font: Please use monospaced font! "
-                                    f"Unsupported font {info.family}.")
-                font = qfd.systemFont(QFontDatabase.FixedFont)
-        elif "Menlo" in qfd.families():
-            font = QFont("Menlo")
-            info = QFontInfo(font)
-        else:
-            font = qfd.systemFont(QFontDatabase.FixedFont)
-            info = QFontInfo(font)
-
-        font.setPointSize(12)
-        self.font = font
-        metrics = QFontMetrics(font)
-        self.char_width = metrics.horizontalAdvance("A")
-        self.char_height = metrics.height()
-        self.line_height = int(self.char_height * 1.2)
-
-        self.logger.info(f"font: Font {info.family()} selected, character "
-                         f"size {self.char_width}x{self.char_height}.")
-
-        self.row_len = int(self._width / self.char_width)
-        self.col_len = int(self._height / self.line_height)
-
-    def resizeEvent(self, event):
-        self.resize(event.size().width(), event.size().height())
-
-    # ==========================
-    #      PAINT FUNCTIONS
-    # ==========================
-
-    def paintEvent(self, event):
-        self._painter_lock.lock()
-        _qp = QPainter(self)
-        _qp.setRenderHint(QPainter.Antialiasing)
-        _qp.drawPixmap(int(PADDING)/2, int(PADDING)/2, self._canvas)
-        super().paintEvent(event)
-        self._painter_lock.unlock()
-
-    def _paint_buffer(self):
-        self._painter_lock.lock()
-
-        self._canvas = QPixmap(self.row_len * self.char_width * self.dpr,
-                               int((self.col_len + 0.2)
-                                   * self.line_height * self.dpr))
-        self._canvas.setDevicePixelRatio(self.dpr)
-
-        qp = QPainter(self._canvas)
-        qp.fillRect(self.rect(), self._bg_color)
-        if not self._buffer:
-            return
-
-        cw = self.char_width
-        ch = self.char_height
-        lh = self.line_height
-        ft = self.font
-        fg_color = self._fg_color
-
-        ht = 0
-
-        offset = self._buffer_display_offset
-
-        qp.fillRect(self.rect(), DEFAULT_BG_COLOR)
-
-        for ln in range(self.col_len):
-            real_ln = ln + offset
-            if real_ln < 0 or real_ln >= len(self._buffer):
-                break
-
-            row = self._buffer[ln + offset]
-
-            ht += lh
-            for cn, c in enumerate(row):
-                if c:
-                    ft.setBold(c.bold)
-                    ft.setUnderline(c.underline)
-                    qp.setFont(ft)
-                    if not c.reverse:
-                        qp.fillRect(cn*cw, int(ht - 0.8*ch), cw, lh,
-                                    c.bg_color)
-                        qp.setPen(c.color)
-                        qp.drawText(cn*cw, ht, c.char)
-                    else:
-                        qp.fillRect(cn*cw, int(ht - 0.8*ch), cw, lh, c.color)
-                        qp.setPen(c.bg_color)
-                        qp.drawText(cn*cw, ht, c.char)
-                else:
-                    qp.setPen(fg_color)
-                    ft.setBold(False)
-                    ft.setUnderline(False)
-                    qp.setFont(ft)
-                    qp.drawText(ht, cn*cw, " ")
-        qp.end()
-
-        self._painter_lock.unlock()
-
-    def _paint_cursor(self):
-        if not self._buffer:
-            return
-
-        self._painter_lock.lock()
-        ind_x = self._cursor_position.x
-        ind_y = self._cursor_position.y
-        # if cursor is at the right edge of screen, display half of it
-        x = (ind_x if ind_x < self.row_len else (self.row_len - 0.5)) \
-            * self.char_width
-        y = (ind_y - self._buffer_display_offset) \
-            * self.line_height + (self.line_height - self.char_height) \
-            + int(0.2 * self.line_height)
-
-        cw = self.char_width
-        ch = self.char_height
-
-        qp = QPainter(self._canvas)
-        fg = DEFAULT_FG_COLOR
-        bg = DEFAULT_BG_COLOR
-
-        if self._cursor_blinking_state == CursorState.UNFOCUSED:
-            outline = QPen(fg)
-            outline.setWidth(1)
-            qp.setPen(outline)
-            qp.fillRect(x, y, cw, ch, bg)
-            qp.drawRect(x + 1, y + 1, cw - 2, ch - 2)
-        else:
-            if self._cursor_blinking_state == CursorState.ON:
-                bg = self._fg_color
-                fg = self._bg_color
-
-            qp.fillRect(x, y, cw, ch, bg)
-        qp.setPen(fg)
-        qp.setFont(self.font)
-
-        cy = (self._cursor_position.y - self._buffer_display_offset + 1) \
-            * self.line_height
-        if ind_x == self.row_len:  # cursor sitting at the edge of screen
-            pass
-        elif self._buffer[ind_y][ind_x]:
-            qp.drawText(x, cy, self._buffer[ind_y][ind_x].char)
-        else:
-            qp.drawText(x, cy, " ")
-
-        qp.end()
-        self._painter_lock.unlock()
-
-    def _canvas_repaint(self):
-        self._paint_buffer()
-        self._paint_cursor()
-        self.repaint()
 
     def set_style(self, color, bg_color, bold, underline, reverse):
         self._fg_color = color if color else self._fg_color
@@ -811,135 +584,137 @@ class Terminal(QWidget):
         self._buffer = _new_buffer
         self._line_wrapped_flags = _new_wrap
 
-    def resize(self, width, height):
-        super().resize(width, height)
+    def create_buffer(self, row_len, col_len):
+        _new_buffer = deque([[None for x in range(row_len)]
+                             for i in range(col_len)])
+        _new_wrap = deque([False for i in range(col_len)])
 
-        self._buffer_lock.lock()
+        self.row_len = row_len
+        self.col_len = col_len
+        self._buffer = _new_buffer
+        self._buffer_display_offset = len(self._buffer) - self.col_len
+        self._line_wrapped_flags = _new_wrap
+        self._cursor_position = Position(0, 0)
 
-        row_len = int((width - PADDING) / self.char_width)
-        col_len = int((height - PADDING) / self.line_height)
-
+    def resize(self, row_len, col_len):
         cur_x = self._cursor_position.x
         cur_y = self._cursor_position.y
 
-        if self._buffer:
-            old_row_len = self.row_len
-            old_buf_col_len = len(self._buffer)
+        if not self._buffer:
+            self.create_buffer(row_len, col_len)
+            return
 
-            if old_row_len == row_len:
-                filler = col_len - old_buf_col_len
-                if filler > 0:
-                    for i in range(filler):
-                        self._buffer.appendleft([None for x in range(row_len)])
-                        self._line_wrapped_flags.appendleft(False)
-                    cur_y += filler
-                    self._cursor_position = Position(cur_x, cur_y)
+        self._buffer_lock.lock()
 
-                self.col_len = col_len
-                self._buffer_display_offset = len(self._buffer) - self.col_len
-                self._buffer_lock.unlock()
-                self.resize_callback(col_len, row_len)
-                return
+        old_row_len = self.row_len
+        old_buf_col_len = len(self._buffer)
 
-            auto_breaks = 0
-            for i in range(cur_y):
-                if self._line_wrapped_flags[i]:
-                    auto_breaks += 1
+        if old_row_len == row_len:
+            filler = col_len - old_buf_col_len
+            if filler > 0:
+                for i in range(filler):
+                    self._buffer.appendleft([None for x in range(row_len)])
+                    self._line_wrapped_flags.appendleft(False)
+                cur_y += filler
+                self._cursor_position = Position(cur_x, cur_y)
 
-            self.logger.info(f"screen: resize triggered, new size ({row_len}x"
-                             f"{col_len})")
+            self.col_len = col_len
+            self._buffer_display_offset = len(self._buffer) - self.col_len
+            self._buffer_lock.unlock()
+            self.resize_callback(col_len, row_len)
+            return
 
-            _new_buffer = deque([[None for x in range(row_len)]])
-            _new_wrap = deque([False])
+        auto_breaks = 0
+        for i in range(cur_y):
+            if self._line_wrapped_flags[i]:
+                auto_breaks += 1
 
-            new_y = 0
-            new_x = 0
-            breaked = False
+        self.logger.info(f"screen: resize triggered, new size ({row_len}x"
+                         f"{col_len})")
 
-            # linebreaks SHOULD be insert when:
-            #  1. reaching the end of a not auto-breaked line
-            #  2. an auto-breaked line is about to overflow
-            # SHOULD NOT be inserted when:
-            #  3. reaching the end of an auto-breaked line
-            #  4. one empty line is breaked into two empty lines i.e. breaking
-            #    whitespaces into the next line
-            #
-            # When the new row length is the integer multiple of the length of
-            # the old row, criteria 1 and 2 will be satisfied simultaneously,
-            # we must be careful not to create two linebreaks but only one.
+        _new_buffer = deque([[None for x in range(row_len)]])
+        _new_wrap = deque([False])
 
-            for y, old_row in enumerate(self._buffer):
-                if y > 0:
-                    # if last line was unfinished and was automantically
-                    # wrapped into the next line in the old screen, this flag
-                    # will be True, which means we don't need to wrap it again
-                    if not self._line_wrapped_flags[y-1]:
-                        if not breaked:
-                            # The _breaked_ flag is used to avoid
-                            # breaking the same line twice
-                            # under the case that the new row length is the
-                            # integer multiple of the length of the old row
-                            _new_buffer.append([None for x in range(row_len)])
-                            _new_wrap.append(False)
-                            new_y += 1
-                            new_x = 0
+        new_y = 0
+        new_x = 0
+        breaked = False
 
-                for x, c in enumerate(old_row):
-                    # clear _breaked_ flag
-                    # note that it should only be set when the new row length
-                    # is the integer multiple of the length of the old row
-                    # under which we should avoid an extra line break being
-                    # inserted
-                    breaked = False
+        # linebreaks SHOULD be insert when:
+        #  1. reaching the end of a not auto-breaked line
+        #  2. an auto-breaked line is about to overflow
+        # SHOULD NOT be inserted when:
+        #  3. reaching the end of an auto-breaked line
+        #  4. one empty line is breaked into two empty lines i.e. breaking
+        #    whitespaces into the next line
+        #
+        # When the new row length is the integer multiple of the length of
+        # the old row, criteria 1 and 2 will be satisfied simultaneously,
+        # we must be careful not to create two linebreaks but only one.
 
-                    _new_buffer[new_y][new_x] = c
-
-                    new_x += 1
-
-                    if new_x >= row_len:
-                        empty_ahead = all(map(lambda c: not c, old_row[x+1:]))
-
-                        if y == old_buf_col_len - 1 and empty_ahead:
-                            # avoid creating extra new lines after last line
-                            break
-
+        for y, old_row in enumerate(self._buffer):
+            if y > 0:
+                # if last line was unfinished and was automantically
+                # wrapped into the next line in the old screen, this flag
+                # will be True, which means we don't need to wrap it again
+                if not self._line_wrapped_flags[y-1]:
+                    if not breaked:
+                        # The _breaked_ flag is used to avoid
+                        # breaking the same line twice
+                        # under the case that the new row length is the
+                        # integer multiple of the length of the old row
                         _new_buffer.append([None for x in range(row_len)])
                         _new_wrap.append(False)
                         new_y += 1
                         new_x = 0
-                        breaked = True
 
-                        if empty_ahead and \
-                                not self._line_wrapped_flags[y]:
-                            # avoid wrapping a bunch of spaces into next line
-                            break
-                        else:
-                            # set the flag for a new auto-line wrap.
-                            _new_wrap[new_y-1] = True
+            for x, c in enumerate(old_row):
+                # clear _breaked_ flag
+                # note that it should only be set when the new row length
+                # is the integer multiple of the length of the old row
+                # under which we should avoid an extra line break being
+                # inserted
+                breaked = False
 
-            filler = old_buf_col_len - len(_new_buffer)
-            if filler > 0:
-                cur_y += filler
+                _new_buffer[new_y][new_x] = c
 
-            for i in range(filler):
-                _new_buffer.appendleft([None for x in range(row_len)])
-                _new_wrap.appendleft(False)
+                new_x += 1
 
-            new_auto_breaks = 0
-            for i in range(min(cur_y, len(_new_buffer)-1)):
-                if _new_wrap[i]:
-                    new_auto_breaks += 1
+                if new_x >= row_len:
+                    empty_ahead = all(map(lambda c: not c, old_row[x+1:]))
 
-            cur_y += (new_auto_breaks - auto_breaks)
+                    if y == old_buf_col_len - 1 and empty_ahead:
+                        # avoid creating extra new lines after last line
+                        break
 
-        else:
-            self.logger.info(f"screen: resize triggered, buffer created, "
-                             f"new size ({row_len}x{col_len})")
-            _new_buffer = deque([[None for x in range(row_len)]
-                                 for i in range(col_len)])
-            _new_wrap = deque([False for i in range(col_len)])
+                    _new_buffer.append([None for x in range(row_len)])
+                    _new_wrap.append(False)
+                    new_y += 1
+                    new_x = 0
+                    breaked = True
 
-        self._save_cursor_state_stop_blinking()
+                    if empty_ahead and \
+                            not self._line_wrapped_flags[y]:
+                        # avoid wrapping a bunch of spaces into next line
+                        break
+                    else:
+                        # set the flag for a new auto-line wrap.
+                        _new_wrap[new_y-1] = True
+
+        filler = old_buf_col_len - len(_new_buffer)
+        if filler > 0:
+            cur_y += filler
+
+        for i in range(filler):
+            _new_buffer.appendleft([None for x in range(row_len)])
+            _new_wrap.appendleft(False)
+
+        new_auto_breaks = 0
+        for i in range(min(cur_y, len(_new_buffer)-1)):
+            if _new_wrap[i]:
+                new_auto_breaks += 1
+
+        cur_y += (new_auto_breaks - auto_breaks)
+
         self.row_len = row_len
         self.col_len = col_len
         self._buffer = _new_buffer
@@ -949,9 +724,6 @@ class Terminal(QWidget):
         self._cursor_position = Position(min(cur_x, row_len), cur_y)
 
         self._buffer_lock.unlock()
-
-        self._paint_buffer()
-        self._restore_cursor_state()
 
         self.resize_callback(col_len, row_len)
         # self._log_buffer()
@@ -1005,8 +777,6 @@ class Terminal(QWidget):
 
         self._buffer_lock.unlock()
         # self._log_buffer()
-        # self._paint_buffer()
-        # (leave repaint event to cursor)
 
     def write_at_cursor(self, text):
         self.write(text, pos=None, set_cursor=True, reset_offset=False)
@@ -1154,8 +924,6 @@ class Terminal(QWidget):
         self._fg_color = DEFAULT_FG_COLOR
         self._bg_color = DEFAULT_BG_COLOR
 
-        self._canvas_repaint()
-
     def toggle_alt_screen_save_cursor(self, on=True):
         if on:
             # save current buffer
@@ -1170,53 +938,6 @@ class Terminal(QWidget):
     # ==========================
     #       CURSOR CONTROL
     # ==========================
-
-    def _blink_cursor(self):
-        self._cursor_blinking_lock.lock()
-
-        if self._cursor_blinking_state == CursorState.ON:  # On
-            if self._cursor_blinking_elapse < 400:
-                # 50 is the period of the timer
-                self._cursor_blinking_elapse += 50
-                self._cursor_blinking_lock.unlock()
-                return
-            else:
-                self._cursor_blinking_state = CursorState.OFF
-        elif self._cursor_blinking_state == CursorState.OFF:  # Off
-            if self._cursor_blinking_elapse < 250:
-                # 50 is the period of the timer
-                self._cursor_blinking_elapse += 50
-                self._cursor_blinking_lock.unlock()
-                return
-            else:
-                self._cursor_blinking_state = CursorState.ON
-
-        self._cursor_blinking_elapse = 0
-        self._cursor_blinking_lock.unlock()
-
-        self._paint_cursor()
-        self.repaint()
-
-    def _switch_cursor_blink(self, state, blink=True):
-        self._cursor_blinking_lock.lock()
-
-        if state != CursorState.UNFOCUSED and blink:
-            self._cursor_blinking_timer.start(50)
-        else:
-            self._cursor_blinking_timer.stop()
-        self._cursor_blinking_state = state
-
-        self._cursor_blinking_lock.unlock()
-        self._paint_cursor()
-        self.repaint()
-
-    def _save_cursor_state_stop_blinking(self):
-        self._saved_cursor_state = self._cursor_blinking_state
-        self._switch_cursor_blink(CursorState.ON, False)
-
-    def _restore_cursor_state(self):
-        self._cursor_blinking_state = self._saved_cursor_state
-        self._switch_cursor_blink(self._cursor_blinking_state, True)
 
     def set_cursor_position(self, x, y):
         self._cursor_position = Position(
@@ -1299,20 +1020,8 @@ class Terminal(QWidget):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
-        self._stdout_sig.emit(string)
-
-    def _stdout(self, string: bytes):
-        # Note that this function accepts UTF-8 only (since python use utf-8).
-        # Normally modern programs will determine the encoding of its stdout
-        # from env variable LC_CTYPE and for most systems, it is set to utf-8.
-        self._buffer_lock.lock()
-        need_draw = False
         for char in string:
-            need_draw = self._stdout_char(char) or need_draw
-        self._buffer_lock.unlock()
-        if need_draw:
-            self._paint_buffer()
-            self.repaint()
+            self._stdout_char(char)
 
     def _stdout_char(self, char: int):
         # ret: need_draw
@@ -1374,101 +1083,4 @@ class Terminal(QWidget):
         #             self._input_buffer = self._input_buffer[0:-1]
         #             self._input_buffer_cursor -= 1
 
-    def focusInEvent(self, event):
-        self._switch_cursor_blink(CursorState.ON, True)
 
-    def focusOutEvent(self, event):
-        self._switch_cursor_blink(CursorState.UNFOCUSED, False)
-
-    def keyPressEvent(self, event):
-        key = event.key()
-        modifiers = event.modifiers()
-        text = event.text()
-
-        while True:
-            # This is a one-shot loop, because I want to use 'break'
-            # to jump out of this block
-            if key == Qt.Key_Up:
-                self.input(b'\x1b[A')
-            elif key == Qt.Key_Down:
-                self.input(b'\x1b[B')
-            elif key == Qt.Key_Right:
-                self.input(b'\x1b[C')
-            elif key == Qt.Key_Left:
-                self.input(b'\x1b[D')
-            else:
-                break  # avoid the execution of 'return'
-            return
-
-        if not modifiers:
-            while True:
-                # This is a one-shot loop, because I want to use 'break'
-                # to jump out of this block
-                if key == Qt.Key_Enter or key == Qt.Key_Return:
-                    self.input(ControlChar.CR.value)
-                elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
-                    self.input(ControlChar.BS.value)
-                elif key == Qt.Key_Escape:
-                    self.input(ControlChar.ESC.value)
-                else:
-                    break  # avoid the execution of 'return'
-                return
-        elif modifiers == Qt.ControlModifier or modifiers == Qt.MetaModifier:
-            if key == Qt.Key_A:
-                self.input(ControlChar.SOH.value)
-            elif key == Qt.Key_B:
-                self.input(ControlChar.STX.value)
-            elif key == Qt.Key_C:
-                self.input(ControlChar.ETX.value)
-            elif key == Qt.Key_D:
-                self.input(ControlChar.EOT.value)
-            elif key == Qt.Key_E:
-                self.input(ControlChar.ENQ.value)
-            elif key == Qt.Key_F:
-                self.input(ControlChar.ACK.value)
-            elif key == Qt.Key_G:
-                self.input(ControlChar.BEL.value)
-            elif key == Qt.Key_H:
-                self.input(ControlChar.BS.value)
-            elif key == Qt.Key_I:
-                self.input(ControlChar.TAB.value)
-            elif key == Qt.Key_J:
-                self.input(ControlChar.LF.value)
-            elif key == Qt.Key_K:
-                self.input(ControlChar.VT.value)
-            elif key == Qt.Key_L:
-                self.input(ControlChar.FF.value)
-            elif key == Qt.Key_M:
-                self.input(ControlChar.CR.value)
-            elif key == Qt.Key_N:
-                self.input(ControlChar.SO.value)
-            elif key == Qt.Key_O:
-                self.input(ControlChar.SI.value)
-            elif key == Qt.Key_P:
-                self.input(ControlChar.DLE.value)
-            elif key == Qt.Key_Q:
-                self.input(ControlChar.DC1.value)
-            elif key == Qt.Key_R:
-                self.input(ControlChar.DC2.value)
-            elif key == Qt.Key_S:
-                self.input(ControlChar.DC3.value)
-            elif key == Qt.Key_T:
-                self.input(ControlChar.DC4.value)
-            elif key == Qt.Key_U:
-                self.input(ControlChar.NAK.value)
-            elif key == Qt.Key_V:
-                self.input(ControlChar.SYN.value)
-            elif key == Qt.Key_W:
-                self.input(ControlChar.ETB.value)
-            elif key == Qt.Key_X:
-                self.input(ControlChar.CAN.value)
-            elif key == Qt.Key_Y:
-                self.input(ControlChar.EM.value)
-            elif key == Qt.Key_Z:
-                self.input(ControlChar.SUB.value)
-            elif key == Qt.Key_BracketLeft:
-                self.input(ControlChar.ESC.value)
-            return
-
-        if text:
-            self.input(text.encode('utf-8'))
