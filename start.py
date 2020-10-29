@@ -20,6 +20,7 @@ if __name__ == "__main__":
     window = QWidget()
     layout = QHBoxLayout()
     terminal = Terminal(400, 300, logger=logger)
+    terminal.maximum_line_history = 2000
     scroll = QScrollBar(Qt.Vertical, terminal)
     terminal.connect_scroll_bar(scroll)
 

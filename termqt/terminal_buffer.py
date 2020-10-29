@@ -117,22 +117,21 @@ class EscapeProcessor:
 
         self._esc_func = {}
 
-        self._csi_func = {}
-        self._csi_func['n'] = self._csi_n
-        self._csi_func['n?'] = self._csi_n
-        self._csi_func['m'] = self._csi_m
-        self._csi_func['J'] = self._csi_J
-        self._csi_func['H'] = self._csi_H
-        self._csi_func['K'] = self._csi_K
-        self._csi_func['P'] = self._csi_P
-        self._csi_func['K'] = self._csi_K
-        self._csi_func['A'] = self._csi_A
-        self._csi_func['B'] = self._csi_B
-        self._csi_func['C'] = self._csi_C
-        self._csi_func['D'] = self._csi_D
-
-        self._csi_func['h?'] = partial(self._csi_h_l_ext, True)
-        self._csi_func['l?'] = partial(self._csi_h_l_ext, False)
+        self._csi_func = {
+            'n': self._csi_n,
+            'n?': self._csi_n,
+            'm': self._csi_m,
+            'J': self._csi_J,
+            'H': self._csi_H,
+            'K': self._csi_K,
+            'P': self._csi_P,
+            'A': self._csi_A,
+            'B': self._csi_B,
+            'C': self._csi_C,
+            'D': self._csi_D,
+            'h?': partial(self._csi_h_l_ext, True),
+            'l?': partial(self._csi_h_l_ext, False)
+        }
 
         # ==== Callbacks ====
 
@@ -541,6 +540,8 @@ class TerminalBuffer:
         self.stdin_callback = lambda t: print(t)
         self.resize_callback = lambda rows, cols: None
 
+        self.maximum_line_history = 5000
+
         self.create_buffer(row_len, col_len)
 
         self._tst_buf = ""
@@ -603,6 +604,8 @@ class TerminalBuffer:
     def resize(self, row_len, col_len):
         cur_x = self._cursor_position.x
         cur_y = self._cursor_position.y
+
+        assert col_len <= self.maximum_line_history
 
         if not self._buffer:
             self.create_buffer(row_len, col_len)
@@ -721,6 +724,11 @@ class TerminalBuffer:
 
         cur_y += (new_auto_breaks - auto_breaks)
 
+        while len(self._buffer) > self.maximum_line_history:
+            _new_buffer.popleft()
+            self._line_wrapped_flags.popleft()
+            cur_y -= 1
+
         self.row_len = row_len
         self.col_len = col_len
         self._buffer = _new_buffer
@@ -775,6 +783,11 @@ class TerminalBuffer:
 
             buf[pos_y][pos_x] = t
             pos_x += 1
+
+        while len(self._buffer) > self.maximum_line_history:
+            buf.popleft()
+            self._line_wrapped_flags.popleft()
+            pos_y -= 1
 
         if set_cursor:
             self._cursor_position = Position(pos_x, pos_y)

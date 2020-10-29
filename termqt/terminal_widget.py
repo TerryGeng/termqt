@@ -277,7 +277,8 @@ class Terminal(TerminalBuffer, QWidget):
         QWidget.resize(self, width, height)
 
         row_len = int((width - PADDING) / self.char_width)
-        col_len = int((height - PADDING) / self.line_height)
+        col_len = min(int((height - PADDING) / self.line_height),
+                      self.maximum_line_history)
 
         TerminalBuffer.resize(self, row_len, col_len)
 
