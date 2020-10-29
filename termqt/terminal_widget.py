@@ -1,7 +1,7 @@
 import logging
 from enum import Enum
 
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QWidget, QScrollBar
 from PyQt5.QtGui import QPainter, QColor, QPalette, QFontDatabase, QPen, \
     QFont, QFontInfo, QFontMetrics, QPixmap
 from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
@@ -39,12 +39,18 @@ class Terminal(TerminalBuffer, QWidget):
     # painting. Note: Use stdout() method.
     _stdout_sig = pyqtSignal(bytes)
 
+    # update scroll bar
+    update_scroll_sig = pyqtSignal()
+
     def __init__(self, width, height, logger=None):
         QWidget.__init__(self)
-        TerminalBuffer.__init__(self, 0, 0)
+
+        self.scroll_bar: QScrollBar = None
 
         self.logger = logger if logger else logging.getLogger()
         self.logger.info("Initializing Terminal...")
+
+        TerminalBuffer.__init__(self, 0, 0, logger)
 
         # we paint everything to the pixmap first then paint this pixmap
         # on paint event. This allows us to partially update the canvas.
@@ -82,6 +88,8 @@ class Terminal(TerminalBuffer, QWidget):
         self._cursor_blinking_timer.timeout.connect(self._blink_cursor)
         self._switch_cursor_blink(state=CursorState.ON, blink=True)
 
+        self.update_scroll_sig.connect(self._update_scroll_position)
+
         self.setFocusPolicy(Qt.StrongFocus)
 
         # terminal options, in case you don't want pty to handle it
@@ -89,6 +97,7 @@ class Terminal(TerminalBuffer, QWidget):
         # self.canonical_mode = True
 
         self._stdout_sig.connect(self._stdout)
+        self.resize(width, height)
 
     def set_bg(self, color: QColor):
         TerminalBuffer.set_bg(self, color)
@@ -459,3 +468,27 @@ class Terminal(TerminalBuffer, QWidget):
 
         if text:
             self.input(text.encode('utf-8'))
+
+    # ==========================
+    #        SCROLL BAR
+    # ==========================
+
+    def _update_scroll_position(self):
+        self.scroll_bar.setMinimum(0)
+        self.scroll_bar.setMaximum(len(self._buffer) - self.col_len)
+        self.scroll_bar.setSliderPosition(self._buffer_display_offset)
+
+    def update_scroll_position(self):
+        if self.scroll_bar:
+            self.update_scroll_sig.emit()
+
+    def connect_scroll_bar(self, scroll_bar: QScrollBar):
+        self.scroll_bar = scroll_bar
+        self.update_scroll_position()
+        self.scroll_bar.valueChanged.connect(self.scroll_bar_changed)
+
+    def scroll_bar_changed(self, pos):
+        if 0 <= pos <= len(self._buffer) - self.col_len:
+            self._buffer_display_offset = pos
+            self._paint_buffer()
+            self.repaint()

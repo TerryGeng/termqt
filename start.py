@@ -1,5 +1,5 @@
 import logging
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QApplication, QWidget, QHBoxLayout, QScrollBar
 from PyQt5.QtCore import Qt, QCoreApplication
 
 from termqt import Terminal, TerminalExecIO
@@ -18,10 +18,14 @@ if __name__ == "__main__":
     QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     app = QApplication([])
     window = QWidget()
-    layout = QVBoxLayout()
+    layout = QHBoxLayout()
     terminal = Terminal(400, 300, logger=logger)
+    scroll = QScrollBar(Qt.Vertical, terminal)
+    terminal.connect_scroll_bar(scroll)
 
     layout.addWidget(terminal)
+    layout.addWidget(scroll)
+    layout.setSpacing(0)
     window.setLayout(layout)
 
     window.show()

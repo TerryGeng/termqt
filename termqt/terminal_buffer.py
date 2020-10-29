@@ -589,10 +589,14 @@ class TerminalBuffer:
                              for i in range(col_len)])
         _new_wrap = deque([False for i in range(col_len)])
 
+        self.logger.info(f"screen: buffer created, size ({row_len}x"
+                         f"{col_len})")
+
         self.row_len = row_len
         self.col_len = col_len
         self._buffer = _new_buffer
         self._buffer_display_offset = len(self._buffer) - self.col_len
+        self.update_scroll_position()
         self._line_wrapped_flags = _new_wrap
         self._cursor_position = Position(0, 0)
 
@@ -620,6 +624,8 @@ class TerminalBuffer:
 
             self.col_len = col_len
             self._buffer_display_offset = len(self._buffer) - self.col_len
+            self.update_scroll_position()
+
             self._buffer_lock.unlock()
             self.resize_callback(col_len, row_len)
             return
@@ -719,6 +725,8 @@ class TerminalBuffer:
         self.col_len = col_len
         self._buffer = _new_buffer
         self._buffer_display_offset = len(self._buffer) - self.col_len
+        self.update_scroll_position()
+
         self._line_wrapped_flags = _new_wrap
         # self.logger.info(f"cursor: ({cur_x}, {cur_y})")
         self._cursor_position = Position(min(cur_x, row_len), cur_y)
@@ -774,6 +782,7 @@ class TerminalBuffer:
         if reset_offset:
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,
                                               self._cursor_position.y)
+            self.update_scroll_position()
 
         self._buffer_lock.unlock()
         # self._log_buffer()
@@ -783,6 +792,7 @@ class TerminalBuffer:
         if self._cursor_position.y - self._buffer_display_offset > \
                 self.col_len - 1:
             self._buffer_display_offset = len(self._buffer) - self.col_len
+            self.update_scroll_position()
 
     def _log_buffer(self):
         self.logger.info(f"buffer: length: {len(self._buffer)}")
@@ -912,6 +922,7 @@ class TerminalBuffer:
             self._buffer = self._alt_buffer
             self._line_wrapped_flags = self._alt_line_wrapped_flags
             self._buffer_display_offset = self._alt_buffer_display_offset
+            self.update_scroll_position()
 
             self._alt_buffer = None
             self._alt_line_wrapped_flags = None
@@ -968,12 +979,14 @@ class TerminalBuffer:
 
         if y < self._buffer_display_offset:
             self._buffer_display_offset = y
+            self.update_scroll_position()
 
         if y >= self._buffer_display_offset + self.col_len:
             while y >= len(self._buffer):
                 self._buffer.append([None for x in range(self.row_len)])
                 self._line_wrapped_flags.append(False)
             self._buffer_display_offset = y - self.col_len + 1
+            self.update_scroll_position()
 
         return x, y
 
@@ -1083,4 +1096,24 @@ class TerminalBuffer:
         #             self._input_buffer = self._input_buffer[0:-1]
         #             self._input_buffer_cursor -= 1
 
+    # ==========================
+    #        SCROLLING
+    # ==========================
+
+    def scroll_down(self, lines):
+        if self._buffer_display_offset + self.col_len + lines <= len(self._buffer):
+            self._buffer_display_offset += lines
+        else:
+            self._buffer_display_offset = len(self._buffer) - self.col_len
+        self.update_scroll_position()
+
+    def scroll_up(self, lines):
+        if self._buffer_display_offset - lines > 0:
+            self._buffer_display_offset -= lines
+        else:
+            self._buffer_display_offset = 0
+        self.update_scroll_position()
+
+    def update_scroll_position(self):
+        pass
 
