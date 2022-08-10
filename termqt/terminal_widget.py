@@ -67,7 +67,7 @@ class Terminal(TerminalBuffer, QWidget):
         self.row_len = None
         self.col_len = None
 
-        self.dpr = self.devicePixelRatioF()
+        self.dpr = int(self.devicePixelRatioF())
 
         self.set_bg(DEFAULT_BG_COLOR)
         self.set_fg(DEFAULT_FG_COLOR)
@@ -153,7 +153,7 @@ class Terminal(TerminalBuffer, QWidget):
         self._painter_lock.lock()
         _qp = QPainter(self)
         _qp.setRenderHint(QPainter.Antialiasing)
-        _qp.drawPixmap(int(PADDING)/2, int(PADDING)/2, self._canvas)
+        _qp.drawPixmap(int(PADDING/2), int(PADDING/2), self._canvas)
         QWidget.paintEvent(self, event)
         self._painter_lock.unlock()
 
