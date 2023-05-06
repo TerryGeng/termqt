@@ -528,6 +528,10 @@ class TerminalBuffer:
         self._alt_buffer_display_offset = None
         self._alt_cursor_position = Position(0, 0)
 
+        # scroll bar
+        self._postpone_scroll_update = False
+        self._scroll_update_pending = False
+
         # terminal options, in case you don't want pty to handle it
         # self.echo = True
         # self.canonical_mode = True
@@ -543,8 +547,6 @@ class TerminalBuffer:
         self.maximum_line_history = 5000
 
         self.create_buffer(row_len, col_len)
-
-        self._tst_buf = ""
 
     def _register_escape_callbacks(self):
         ep = self.escape_processor
@@ -795,7 +797,7 @@ class TerminalBuffer:
         if reset_offset:
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,
                                               self._cursor_position.y)
-            self.update_scroll_position()
+            self.update_scroll_position_postponed()
 
         self._buffer_lock.unlock()
         # self._log_buffer()
@@ -805,7 +807,7 @@ class TerminalBuffer:
         if self._cursor_position.y - self._buffer_display_offset > \
                 self.col_len - 1:
             self._buffer_display_offset = len(self._buffer) - self.col_len
-            self.update_scroll_position()
+            self.update_scroll_position_postponed()
 
     def _log_buffer(self):
         self.logger.info(f"buffer: length: {len(self._buffer)}")
@@ -992,14 +994,14 @@ class TerminalBuffer:
 
         if y < self._buffer_display_offset:
             self._buffer_display_offset = y
-            self.update_scroll_position()
+            self.update_scroll_position_postponed()
 
         if y >= self._buffer_display_offset + self.col_len:
             while y >= len(self._buffer):
                 self._buffer.append([None for x in range(self.row_len)])
                 self._line_wrapped_flags.append(False)
             self._buffer_display_offset = y - self.col_len + 1
-            self.update_scroll_position()
+            self.update_scroll_position_postponed()
 
         return x, y
 
@@ -1057,7 +1059,6 @@ class TerminalBuffer:
             if ret == 1:
                 return True
             elif ret == -1:
-                self._tst_buf += chr(char)
                 if char == ControlChar.BS.value:
                     self.backspace()
                 elif char == ControlChar.LF.value:
@@ -1079,6 +1080,60 @@ class TerminalBuffer:
 
         except ValueError as e:
             self.logger.debug(e)
+
+    def _stdout_string(self, string: bytes):
+        # ret: need_draw
+        need_draw = False
+        tst_buf = ""
+
+        for char in string:
+            try:
+                # self.clear_input_buffer()
+                ret = self.escape_processor.input(char)
+                if ret == 0:
+                    if tst_buf:
+                        self.write_at_cursor(tst_buf)
+                        tst_buf = ""
+                    continue
+
+                if ret == 1:
+                    need_draw = True
+                    continue
+
+                if ret == -1:
+                    if char == ControlChar.BS.value:
+                        if tst_buf:
+                            self.write_at_cursor(tst_buf)
+                            tst_buf = ""
+                        self.backspace()
+                    elif char == ControlChar.CR.value:
+                        if tst_buf:
+                            self.write_at_cursor(tst_buf)
+                            tst_buf = ""
+                        self.carriage_feed()
+
+                    elif char == ControlChar.LF.value:
+                        if tst_buf:
+                            self.write_at_cursor(tst_buf)
+                            tst_buf = ""
+                        self.write_at_cursor("\n")
+                    elif char == ControlChar.TAB.value:
+                        tst_buf += "        "
+                    elif char == ControlChar.BEL.value:
+                        # TODO: visual bell
+                        pass
+                    elif 32 <= char <= 126 or char >= 128:
+                        tst_buf += chr(char)
+                    else:
+                        self.logger.warn(f"Unhandled char {hex(char)}.")
+                    need_draw = True
+            except ValueError as e:
+                self.logger.debug(e)
+
+        if tst_buf:
+            self.write_at_cursor(tst_buf)
+
+        return need_draw
 
     def input(self, char):
         if isinstance(char, bytes):
@@ -1129,4 +1184,10 @@ class TerminalBuffer:
 
     def update_scroll_position(self):
         pass
+
+    def update_scroll_position_postponed(self):
+        if self._postpone_scroll_update:
+            self._scroll_update_pending = True
+        else:
+            self.update_scroll_position()
 

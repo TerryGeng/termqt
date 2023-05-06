@@ -88,6 +88,8 @@ class Terminal(TerminalBuffer, QWidget):
         self._cursor_blinking_timer.timeout.connect(self._blink_cursor)
         self._switch_cursor_blink(state=CursorState.ON, blink=True)
 
+        # scroll bar
+
         self.update_scroll_sig.connect(self._update_scroll_position)
 
         self.setFocusPolicy(Qt.StrongFocus)
@@ -362,12 +364,17 @@ class Terminal(TerminalBuffer, QWidget):
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
+        self._postpone_scroll_update = True
         self._buffer_lock.lock()
         need_draw = False
-        for char in string:
-            need_draw = self._stdout_char(char) or need_draw
+        # for char in string:
+        #     need_draw = self._stdout_char(char) or need_draw
+        need_draw = self._stdout_string(string)
         self._buffer_lock.unlock()
         if need_draw:
+            self._postpone_scroll_update = False
+            if self._scroll_update_pending:
+                self.update_scroll_position()
             self._paint_buffer()
             self.repaint()
 
