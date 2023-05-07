@@ -418,7 +418,7 @@ class EscapeProcessor:
         i = 0
         while i < len(self._args):
             arg = self._get_args(i, default=0)
-            if 0 <= arg <= 7:
+            if 0 <= arg <= 29:
                 i += 1
                 if arg == 0:
                     bold, underline, reverse = 0, 0, 0
@@ -430,6 +430,12 @@ class EscapeProcessor:
                     underline = 1
                 elif arg == 7:
                     reverse = 1
+                elif arg == 22:
+                    bold = 0
+                elif arg == 24:
+                    underline = 0
+                elif arg == 27:
+                    reverse = 0
                 continue
 
             elif 30 <= arg <= 37 or 40 <= arg <= 47 or \
@@ -456,6 +462,14 @@ class EscapeProcessor:
                     elif arg1 == 1:  # background 16 colors
                         bg_color = colors16[arg - 10]
                 continue
+
+            elif arg == 39:
+                color = DEFAULT_FG_COLOR
+                break
+
+            elif arg == 49:
+                bg_color = DEFAULT_BG_COLOR
+                break
 
             else:
                 if i + 2 < len(self._args):  # need two consecuted args
