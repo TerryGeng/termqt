@@ -66,45 +66,48 @@ class EscapeProcessor:
         # initial state, 0
         WAIT_FOR_ESC = 0
         # once entered, reset all buffers
-        # if receives a ESC, transfer to 1
+        # if receives a ESC, transfer to WAIT_FOR_BRAC_OR_CHAR
 
         WAIT_FOR_BRAC_OR_CHAR = 1
-        # if receive a [, transfer to 2
-        # if receive a ], transfer to 5
-        # if receive a letter/digit, save to cmd buffer, transfer to 4
+        # if receive a [, transfer to CSI_WAIT_FOR_MARKS
+        # if receive a ], transfer to OSC_WAIT_FOR_NEXT_ARG
+        # if receive a letter/digit, save to cmd buffer, transfer to ESC_COMPLETE
+        # otherwise return to WAIT_FOR_ESC
+
+        CSI_WAIT_FOR_MARKS = 2
+        # if receive ?, =, <, >, #, save to marks, transfer to CSI_WAIT_FOR_NEXT_ARG
+        # if receive a number, append to arg buf, transfer to CSI_WAIT_FOR_ARG_FINISH
+        # if receive a letter, save to cmd buffer, transfer to CSI_COMPLETE
         # otherwise return to 0
 
-        WAIT_FOR_MARKS = 2
-        # if receive ?, =, <, >, #, save to marks, transfer to 3
-        # if receive a number, append to arg buf, transfer to 4
-        # if receive a letter, save to cmd buffer, transfer to 5
+        CSI_WAIT_FOR_NEXT_ARG = 3
+        # if receives a number, append to arg buf, transfer to CSI_WAIT_FOR_ARG_FINISH
+        # if receive a letter, save to cmd buffer, transfer to CSI_COMPLETE
         # otherwise return to 0
 
-        WAIT_FOR_NEXT_ARG = 3
-        # if receives a number, append to arg buf, transfer to 4
-        # if receive a letter, save to cmd buffer, transfer to 5
-        # otherwise return to 0
+        CSI_WAIT_FOR_ARG_FINISH = 4
+        # if receives a number, append to arg buf, stays at CSI_WAIT_FOR_ARG_FINISH
+        # if receive a colon, append arg buf to arg list, transfer to CSI_WAIT_FOR_NEXT_ARG
+        # if receive a letter, save to cmd buffer, transfer to CSI_COMPLETE
+        # otherwise return to WAIT_FOR_ESC
 
-        WAIT_FOR_ARG_FINISH = 4
-        # if receives a number, append to arg buf, stays at 4
-        # if receive a colon, append arg buf to arg list, transfer to 3
-        # if receive a letter, save to cmd buffer, transfer to 5
-        # otherwise return to 0
+        ESC_COMPLETE = 5
+        # once entered, process the input and return to WAIT_FOR_ESC
 
-        COMPLETE = 5
-        # once entered, process the input and return to 0
+        CSI_COMPLETE = 6
+        # once entered, process the input and return to WAIT_FOR_ESC
 
-        OSC_WAIT_FOR_NEXT_ARG = 6
-        # if receives a number/letter, append to osc arg buf, transfer to 7
-        # otherwise return to 0
+        OSC_WAIT_FOR_NEXT_ARG = 7
+        # if receives a number/letter, append to osc arg buf, transfer to OSC_WAIT_FOR_ARG_FINISH
+        # otherwise return to WAIT_FOR_ESC
 
-        OSC_WAIT_FOR_ARG_FINISH = 7
-        # if receives a number/letter, append to osc arg buf, stay at 7
-        # if receive a colon, append arg buf to arg list, transfer to 6
-        # if receive a BEL or ESC, transfer to 8
-        # otherwise return to 0
+        OSC_WAIT_FOR_ARG_FINISH = 8
+        # if receives a number/letter, append to osc arg buf, stay at OSC_WAIT_FOR_ARG_FINISH
+        # if receive a colon, append arg buf to arg list, transfer to OSC_WAIT_FOR_NEXT_ARG
+        # if receive a BEL or ESC, transfer to OSC_COMPLETE
+        # otherwise return to WAIT_FOR_ESC
 
-        OSC_COMPLETE = 8
+        OSC_COMPLETE = 9
 
     def __init__(self, logger):
         self.logger = logger
@@ -115,25 +118,36 @@ class EscapeProcessor:
         self._mark = ""
         self._buffer = ""
 
-        self._esc_func = {}
+        self._esc_func = {
+            'M': self._esc_m,
+        }
 
         self._csi_func = {
             'n': self._csi_n,
             'n?': self._csi_n,
             'm': self._csi_m,
-            'J': self._csi_J,
-            'H': self._csi_H,
-            'K': self._csi_K,
             'P': self._csi_P,
             'A': self._csi_A,
             'B': self._csi_B,
             'C': self._csi_C,
             'D': self._csi_D,
+            'G': self._csi_G,
+            'H': self._csi_H,
+            'J': self._csi_J,
+            'K': self._csi_K,
+            'M': self._csi_M,
             'h?': partial(self._csi_h_l_ext, True),
             'l?': partial(self._csi_h_l_ext, False)
         }
 
         # ==== Callbacks ====
+
+        # Reverse Index
+        # - if the cursor is inside the display region:
+        #   - if cursor is on top-most line: scroll up by one line
+        #   - else: move cursor one line up
+        # - else: move cursor one line up if the resulted cursor lies inside the buffer
+        self.reverse_index_cb = lambda: None
 
         # Erase In Display
         #  mode:
@@ -149,6 +163,10 @@ class EscapeProcessor:
         #      2: the entire line
         self.erase_line_cb = lambda mode: None
 
+        # Delete Line(s)
+        #  lines: number of lines to delete
+        self.delete_line_cb = lambda lines: None
+
         # Cursor Position(absolute position)
         #  set the position of the cursor
         #  pos_r: row (begin from 0)
@@ -160,6 +178,9 @@ class EscapeProcessor:
         #  offset_r: row (begin from 0)
         #  offset_c: column
         self.set_cursor_rel_position_cb = lambda offset_x, offset_c: None
+
+        # Cursor Horizontal Absolute
+        self.set_cursor_x_position_cb = lambda x: None
 
         # Cursor Position Report
         #  return the position of the cursor in the format of
@@ -224,58 +245,58 @@ class EscapeProcessor:
 
         elif self._state == self.State.WAIT_FOR_BRAC_OR_CHAR:
             if c == 91:  # ord('[')
-                self._enter_state(self.State.WAIT_FOR_MARKS)
+                self._enter_state(self.State.CSI_WAIT_FOR_MARKS)
             elif c == 93:  # ord(']')
                 self._enter_state(self.State.OSC_WAIT_FOR_NEXT_ARG)
             elif 48 <= c <= 57 or \
                     65 <= c <= 90 or 97 <= c <= 122:  # 0-9, A-Z, a-z
                 self._cmd = chr(c)
-                self._enter_state(self.State.COMPLETE)
+                self._enter_state(self.State.ESC_COMPLETE)
                 return 1
             else:
                 self.fail()
 
-        elif self._state == self.State.WAIT_FOR_MARKS:
+        elif self._state == self.State.CSI_WAIT_FOR_MARKS:
             if c in [ord('?'), ord('#'), ord('<'), ord('>'), ord('=')]:
                 self._mark = chr(c)
-                self._enter_state(self.State.WAIT_FOR_NEXT_ARG)
+                self._enter_state(self.State.CSI_WAIT_FOR_NEXT_ARG)
             elif 48 <= c <= 57:  # digits, 0-9
                 self._arg_buf += chr(c)
-                self._enter_state(self.State.WAIT_FOR_ARG_FINISH)
+                self._enter_state(self.State.CSI_WAIT_FOR_ARG_FINISH)
             elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
                 self._cmd = chr(c)
-                self._enter_state(self.State.COMPLETE)
+                self._enter_state(self.State.CSI_COMPLETE)
                 return 1
             else:
                 self.fail()
 
-        elif self._state == self.State.WAIT_FOR_NEXT_ARG:
+        elif self._state == self.State.CSI_WAIT_FOR_NEXT_ARG:
             if 48 <= c <= 57:  # digits, 0-9
                 self._arg_buf += chr(c)
-                self._enter_state(self.State.WAIT_FOR_ARG_FINISH)
+                self._enter_state(self.State.CSI_WAIT_FOR_ARG_FINISH)
             elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
                 self._cmd = chr(c)
-                self._enter_state(self.State.COMPLETE)
+                self._enter_state(self.State.CSI_COMPLETE)
                 return 1
             else:
                 self.fail()
 
-        elif self._state == self.State.WAIT_FOR_ARG_FINISH:
+        elif self._state == self.State.CSI_WAIT_FOR_ARG_FINISH:
             if 48 <= c <= 57:  # digits, 0-9
                 self._arg_buf += chr(c)
             elif c == 59:  # ord(';')
                 self._args.append(int(self._arg_buf))
                 self._arg_buf = ""
-                self._enter_state(self.State.WAIT_FOR_NEXT_ARG)
+                self._enter_state(self.State.CSI_WAIT_FOR_NEXT_ARG)
             elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
                 self._args.append(int(self._arg_buf))
                 self._cmd = chr(c)
-                self._enter_state(self.State.COMPLETE)
+                self._enter_state(self.State.CSI_COMPLETE)
                 return 1
             else:
                 self.fail()
 
-        elif self._state == self.State.COMPLETE:
+        elif self._state == self.State.CSI_COMPLETE:
             # this branch should never be reached
             self.fail()
 
@@ -314,8 +335,12 @@ class EscapeProcessor:
         return 0
 
     def _enter_state(self, _state):
-        if _state == self.State.COMPLETE:
-            self._state = self.State.COMPLETE
+        if _state == self.State.ESC_COMPLETE:
+            self._state = self.State.ESC_COMPLETE
+            self._process_esc_command()
+            self.reset()
+        elif _state == self.State.CSI_COMPLETE:
+            self._state = self.State.CSI_COMPLETE
             self._process_csi_command()
             self.reset()
         elif _state == self.State.OSC_COMPLETE:
@@ -325,8 +350,20 @@ class EscapeProcessor:
         else:
             self._state = _state
 
+    def _process_esc_command(self):
+        assert self._state == self.State.ESC_COMPLETE
+
+        cmd = self._cmd
+
+        if cmd in self._esc_func:
+            # self.logger.debug(f"escape: fired {self._buffer}")
+            self._esc_func[cmd]()
+            self.reset()
+        else:
+            self.fail()
+
     def _process_csi_command(self):
-        assert self._state == self.State.COMPLETE
+        assert self._state == self.State.CSI_COMPLETE
 
         cmd = self._cmd if not self._mark else (self._cmd + self._mark)
 
@@ -367,6 +404,12 @@ class EscapeProcessor:
         raise ValueError("Unable to process escape sequence "
                          f"{buf}.")
 
+    def _esc_m(self):
+        # RI - Reverse Index
+        # Move the cursor to the previous line in the scrolling region, possibly scrolling.
+
+        self.reverse_index_cb()
+
     def _csi_n(self):
         # DSR – Device Status Report
         arg = self._get_args(0, default=0)
@@ -386,11 +429,14 @@ class EscapeProcessor:
     def _csi_P(self):
         self.erase_line_cb(0)
 
+    def _csi_M(self):
+        self.delete_line_cb(self._get_args(0, default=1))
+
     def _csi_H(self):
-        # CUP – Cursor Position
+        # CUP – Cursor On-Screen Position
         self.set_cursor_abs_position_cb(
-            self._get_args(0, default=1) - 1,  # begin from 1 -> begin from 0
-            self._get_args(1, default=1) - 1
+            self._get_args(1, default=1) - 1,
+            self._get_args(0, default=1) - 1  # begin from 1 -> begin from 0
         )
 
     def _csi_A(self):
@@ -408,6 +454,11 @@ class EscapeProcessor:
     def _csi_D(self):
         # Cursor Left
         self.set_cursor_rel_position_cb(-1 * self._get_args(0, default=1), 0)
+
+    def _csi_G(self):
+        # Cursor Horizontal Absolute
+        index_in_line = self._get_args(0, default=0) - 1
+        self.set_cursor_x_position_cb(index_in_line)
 
     def _csi_m(self):
         # Colors and decorators
@@ -572,8 +623,11 @@ class TerminalBuffer:
         ep = self.escape_processor
         ep.erase_display_cb = self.erase_display
         ep.erase_line_cb = self.erase_line
-        ep.set_cursor_abs_position_cb = self.set_cursor_position
+        ep.delete_line_cb = self.delete_line
+        ep.reverse_index_cb = lambda: self.set_cursor_rel_pos(0, -1, False)
+        ep.set_cursor_abs_position_cb = self.set_cursor_on_screen_position
         ep.set_cursor_rel_position_cb = self.set_cursor_rel_pos
+        ep.set_cursor_x_position_cb = self.set_cursor_x_pos
         ep.report_device_status_cb = lambda: self.stdin_callback(
             "\x1b[0n".encode("utf-8"))
         ep.report_cursor_position_cb = self.report_cursor_pos
@@ -824,9 +878,13 @@ class TerminalBuffer:
 
     def write_at_cursor(self, text):
         self.write(text, pos=None, set_cursor=True, reset_offset=False)
-        if self._cursor_position.y - self._buffer_display_offset > \
-                self.col_len - 1:
-            self._buffer_display_offset = len(self._buffer) - self.col_len
+
+        y_from_screen_top = self._cursor_position.y - self._buffer_display_offset
+
+        if y_from_screen_top > self.col_len - 1:
+            self._buffer_display_offset = min(
+                    self._buffer_display_offset + y_from_screen_top - self.col_len + 1,
+                    len(self._buffer) - self.col_len)
             self.update_scroll_position_postponed()
 
     def _log_buffer(self):
@@ -893,7 +951,7 @@ class TerminalBuffer:
 
     def delete_at_cursor(self):
         pos = self._cursor_position
-        self._log_buffer()
+        # self._log_buffer()
         self._buffer_lock.lock()
         pos_x = pos.x
         pos_y = pos.y
@@ -901,7 +959,7 @@ class TerminalBuffer:
         self._buffer[pos_y][pos_x] = None
         self._buffer_lock.unlock()
 
-        self._log_buffer()
+        # self._log_buffer()
 
     def erase_display(self, mode=2):
         buf = self._buffer
@@ -940,6 +998,28 @@ class TerminalBuffer:
         else:
             for x in range(self.row_len):
                 buf[cur_pos.y][x] = None
+
+    def delete_line(self, lines=1):
+        buf = self._buffer
+        self._buffer_lock.lock()
+        cur_pos = self._cursor_position
+
+        pos_x = 0
+        pos_y = min(cur_pos.y - lines, 0)
+
+        self._buffer_display_offset = min(self._buffer_display_offset - lines, 0)
+
+        for y in range(min(cur_pos.y - lines + 1, 0), cur_pos.y + 1):
+            del buf[y]
+
+        if self._buffer_display_offset > len(self._buffer):
+            self._buffer_display_offset = max(len(self._buffer) - 1, 0)
+
+            self.update_scroll_position_postponed()
+
+        self._cursor_position = Position(pos_x, pos_y)
+
+        self._buffer_lock.unlock()
 
     def toggle_alt_screen(self, on=True):
         if on:
@@ -990,6 +1070,11 @@ class TerminalBuffer:
             *self._move_screen_with_pos(x, y)
         )
 
+    def set_cursor_on_screen_position(self, x, y):
+        pos_y = self._buffer_display_offset + y
+        pos_x = x
+        self.set_cursor_position(pos_x, pos_y)
+
     def _keep_pos_in_screen(self, x, y):
         if y < self._buffer_display_offset:
             y = self._buffer_display_offset
@@ -1012,14 +1097,17 @@ class TerminalBuffer:
             x = x - self.row_len
             y += 1
 
+        y = max(y, 0)
+
         if y < self._buffer_display_offset:
             self._buffer_display_offset = y
             self.update_scroll_position_postponed()
 
+        while y >= len(self._buffer):
+            self._buffer.append([None for x in range(self.row_len)])
+            self._line_wrapped_flags.append(False)
+
         if y >= self._buffer_display_offset + self.col_len:
-            while y >= len(self._buffer):
-                self._buffer.append([None for x in range(self.row_len)])
-                self._line_wrapped_flags.append(False)
             self._buffer_display_offset = y - self.col_len + 1
             self.update_scroll_position_postponed()
 
@@ -1045,11 +1133,19 @@ class TerminalBuffer:
 
         self.set_cursor_position(x, y)
 
-    def set_cursor_rel_pos(self, offset_x, offset_y):
+    def set_cursor_rel_pos(self, offset_x, offset_y, keep_pos_in_screen=True):
         x = self._cursor_position.x + offset_x
         y = self._cursor_position.y + offset_y
 
-        self.set_cursor_position(*self._keep_pos_in_screen(x, y))
+        if keep_pos_in_screen:
+            self.set_cursor_position(*self._keep_pos_in_screen(x, y))
+        else:
+            self.set_cursor_position(x, y)
+
+    def set_cursor_x_pos(self, x: int):
+        y = self._cursor_position.y
+
+        self.set_cursor_position(x, y)
 
     def report_cursor_pos(self):
         x = self._cursor_position.x + 1
