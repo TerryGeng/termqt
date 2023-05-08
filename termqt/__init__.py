@@ -1,3 +1,9 @@
+import platform
+
 from .terminal_widget import Terminal
 from .terminal_buffer import TerminalBuffer
-from .terminal_io import TerminalIO, TerminalExecIO
+
+if platform.system() == "Windows":
+    from .terminal_io_windows import TerminalIO, TerminalExecIO
+else:
+    from .terminal_io_posix import TerminalIO, TerminalExecIO
