@@ -9,7 +9,11 @@ from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
 from .terminal_buffer import TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar
 
-PADDING = 4
+settings = {
+    "padding": 4,
+    "font-size": 10,
+    "line-height-factor": 1.2,
+}
 
 
 class CursorState(Enum):
@@ -122,7 +126,7 @@ class Terminal(TerminalBuffer, QWidget):
             info = QFontInfo(font)
             if info.styleHint() != QFont.Monospace:
                 self.logger.warning("font: Please use monospaced font! "
-                                    f"Unsupported font {info.family}.")
+                                    f"Unsupported font {info.family()}.")
                 font = qfd.systemFont(QFontDatabase.FixedFont)
         elif "Menlo" in qfd.families():
             font = QFont("Menlo")
@@ -131,12 +135,12 @@ class Terminal(TerminalBuffer, QWidget):
             font = qfd.systemFont(QFontDatabase.FixedFont)
             info = QFontInfo(font)
 
-        font.setPointSize(12)
+        font.setPointSize(settings["font-size"])
         self.font = font
         metrics = QFontMetrics(font)
         self.char_width = metrics.horizontalAdvance("A")
         self.char_height = metrics.height()
-        self.line_height = int(self.char_height * 1.2)
+        self.line_height = int(self.char_height * settings["line-height-factor"])
 
         self.logger.info(f"font: Font {info.family()} selected, character "
                          f"size {self.char_width}x{self.char_height}.")
@@ -155,7 +159,11 @@ class Terminal(TerminalBuffer, QWidget):
         self._painter_lock.lock()
         _qp = QPainter(self)
         _qp.setRenderHint(QPainter.Antialiasing)
-        _qp.drawPixmap(int(PADDING/2), int(PADDING/2), self._canvas)
+        _qp.drawPixmap(
+            int(settings["padding"]/2),
+            int(settings["padding"]/2),
+            self._canvas
+        )
         QWidget.paintEvent(self, event)
         self._painter_lock.unlock()
 
@@ -278,9 +286,11 @@ class Terminal(TerminalBuffer, QWidget):
 
         QWidget.resize(self, width, height)
 
-        row_len = int((width - PADDING) / self.char_width)
-        col_len = min(int((height - PADDING) / self.line_height),
-                      self.maximum_line_history)
+        row_len = int((width - settings["padding"]) / self.char_width)
+        col_len = min(
+            int((height - settings["padding"]) / self.line_height),
+            self.maximum_line_history
+        )
 
         TerminalBuffer.resize(self, row_len, col_len)
 
@@ -476,7 +486,13 @@ class Terminal(TerminalBuffer, QWidget):
 
         if text:
             self.input(text.encode('utf-8'))
-
+    
+    def showEvent(self, event):
+        super().showEvent(event)
+        def resize(*args):
+            self.resize(self.size().width(), self.size().height())
+        QTimer.singleShot(0, resize)
+    
     # ==========================
     #        SCROLL BAR
     # ==========================
