@@ -709,10 +709,10 @@ class TerminalBuffer:
             self.resize_callback(col_len, row_len)
             return
 
-        auto_breaks = 0
+        old_auto_breaks_before_cursor = 0
         for i in range(cur_y):
             if self._line_wrapped_flags[i]:
-                auto_breaks += 1
+                old_auto_breaks_before_cursor += 1
 
         self.logger.info(f"screen: resize triggered, new size ({row_len}x"
                          f"{col_len})")
@@ -722,6 +722,7 @@ class TerminalBuffer:
 
         new_y = 0
         new_x = 0
+        new_auto_breaks_before_cursor = 0
         breaked = False
 
         # linebreaks SHOULD be insert when:
@@ -783,7 +784,15 @@ class TerminalBuffer:
                         break
                     else:
                         # set the flag for a new auto-line wrap.
-                        _new_wrap[new_y-1] = True
+                        new_auto_break_y = new_y - 1
+                        _new_wrap[new_auto_break_y] = True
+
+                        if new_auto_break_y < cur_y:
+                            new_auto_breaks_before_cursor += 1
+                            if new_auto_breaks_before_cursor > old_auto_breaks_before_cursor:
+                                cur_y += 1
+
+        cur_y -= max(0, old_auto_breaks_before_cursor - new_auto_breaks_before_cursor)
 
         filler = old_buf_col_len - len(_new_buffer)
         if filler > 0:
@@ -792,13 +801,6 @@ class TerminalBuffer:
         for i in range(filler):
             _new_buffer.appendleft([None for x in range(row_len)])
             _new_wrap.appendleft(False)
-
-        new_auto_breaks = 0
-        for i in range(min(cur_y, len(_new_buffer)-1)):
-            if _new_wrap[i]:
-                new_auto_breaks += 1
-
-        cur_y += (new_auto_breaks - auto_breaks)
 
         while len(self._buffer) > self.maximum_line_history:
             _new_buffer.popleft()
