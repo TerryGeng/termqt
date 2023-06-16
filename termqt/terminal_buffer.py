@@ -557,7 +557,12 @@ class EscapeProcessor:
 
 
 class TerminalBuffer:
-    def __init__(self, row_len=0, col_len=0, logger=None):
+    def __init__(self,
+                 row_len,
+                 col_len,
+                 *,
+                 logger=None,
+                 ):
         self.logger = logger
 
         # initialize a buffer to store all characters to display

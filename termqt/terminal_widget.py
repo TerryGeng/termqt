@@ -9,12 +9,6 @@ from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
 from .terminal_buffer import TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar
 
-settings = {
-    "padding": 4,
-    "font-size": 10,
-    "line-height-factor": 1.2,
-}
-
 
 class CursorState(Enum):
     ON = 1
@@ -46,7 +40,17 @@ class Terminal(TerminalBuffer, QWidget):
     # update scroll bar
     update_scroll_sig = pyqtSignal()
 
-    def __init__(self, width, height, logger=None):
+    def __init__(self,
+                 width,
+                 height,
+                 *,
+                 logger=None,
+                 padding=4,
+                 font_size=12,
+                 line_height_factor=1.2,
+                 font=None
+                 ):
+
         QWidget.__init__(self)
 
         self.scroll_bar: QScrollBar = None
@@ -54,7 +58,7 @@ class Terminal(TerminalBuffer, QWidget):
         self.logger = logger if logger else logging.getLogger()
         self.logger.info("Initializing Terminal...")
 
-        TerminalBuffer.__init__(self, 0, 0, logger)
+        TerminalBuffer.__init__(self, 0, 0, logger=logger)
 
         # we paint everything to the pixmap first then paint this pixmap
         # on paint event. This allows us to partially update the canvas.
@@ -63,7 +67,10 @@ class Terminal(TerminalBuffer, QWidget):
 
         self._width = width
         self._height = height
+        self._padding = padding
+        self._line_height_factor = line_height_factor
 
+        self.font_size = font_size
         self.font = None
         self.char_width = None
         self.char_height = None
@@ -75,7 +82,7 @@ class Terminal(TerminalBuffer, QWidget):
 
         self.set_bg(DEFAULT_BG_COLOR)
         self.set_fg(DEFAULT_FG_COLOR)
-        self.set_font()
+        self.set_font(font)
         self.setAutoFillBackground(True)
         self.setMinimumSize(width, height)
 
@@ -131,16 +138,19 @@ class Terminal(TerminalBuffer, QWidget):
         elif "Menlo" in qfd.families():
             font = QFont("Menlo")
             info = QFontInfo(font)
+        elif "Consolas" in qfd.families():
+            font = QFont("Consolas")
+            info = QFontInfo(font)
         else:
             font = qfd.systemFont(QFontDatabase.FixedFont)
             info = QFontInfo(font)
 
-        font.setPointSize(settings["font-size"])
+        font.setPointSize(self.font_size)
         self.font = font
         metrics = QFontMetrics(font)
         self.char_width = metrics.horizontalAdvance("A")
         self.char_height = metrics.height()
-        self.line_height = int(self.char_height * settings["line-height-factor"])
+        self.line_height = int(self.char_height * self._line_height_factor)
 
         self.logger.info(f"font: Font {info.family()} selected, character "
                          f"size {self.char_width}x{self.char_height}.")
@@ -160,8 +170,8 @@ class Terminal(TerminalBuffer, QWidget):
         _qp = QPainter(self)
         _qp.setRenderHint(QPainter.Antialiasing)
         _qp.drawPixmap(
-            int(settings["padding"]/2),
-            int(settings["padding"]/2),
+            int(self._padding/2),
+            int(self._padding/2),
             self._canvas
         )
         QWidget.paintEvent(self, event)
@@ -286,9 +296,9 @@ class Terminal(TerminalBuffer, QWidget):
 
         QWidget.resize(self, width, height)
 
-        row_len = int((width - settings["padding"]) / self.char_width)
+        row_len = int((width - self._padding) / self.char_width)
         col_len = min(
-            int((height - settings["padding"]) / self.line_height),
+            int((height - self._padding) / self.line_height),
             self.maximum_line_history
         )
 
@@ -486,13 +496,13 @@ class Terminal(TerminalBuffer, QWidget):
 
         if text:
             self.input(text.encode('utf-8'))
-    
+
     def showEvent(self, event):
         super().showEvent(event)
         def resize(*args):
             self.resize(self.size().width(), self.size().height())
         QTimer.singleShot(0, resize)
-    
+
     # ==========================
     #        SCROLL BAR
     # ==========================
