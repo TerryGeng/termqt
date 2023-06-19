@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QHBoxLayout, QScrollBar
 from PyQt5.QtCore import Qt, QCoreApplication
 from PyQt5.QtGui import QFont
 
+import termqt
 from termqt import Terminal
 
 if __name__ == "__main__":
@@ -36,30 +37,39 @@ if __name__ == "__main__":
 
     window.show()
 
+    auto_wrap_enabled = True
+
     platform = platform.system()
 
     if platform in ["Linux", "Darwin"]:
-        command = "/bin/bash"
+        bin = "/bin/bash"
 
         from termqt import TerminalPOSIXExecIO
         terminal_io = TerminalPOSIXExecIO(
-            terminal.row_len,
-            terminal.col_len,
-            command,
-            logger=logger
-        )
+                terminal.row_len,
+                terminal.col_len,
+                bin,
+                logger=logger
+                )
     elif platform == "Windows":
-        command = "cmd"
+        bin = "cmd"
+
         from termqt import TerminalWinptyIO
         terminal_io = TerminalWinptyIO(
-            terminal.row_len,
-            terminal.col_len,
-            command,
-            logger=logger
-        )
+                terminal.row_len,
+                terminal.col_len,
+                bin,
+                logger=logger
+                )
+
+        # it turned out that cmd prefers to handle resize by itself
+        # see https://github.com/TerryGeng/termqt/issues/7
+        auto_wrap_enabled = False
     else:
         logger.error(f"Not supported platform: {platform}")
         sys.exit(-1)
+
+    terminal.enable_auto_wrap(auto_wrap_enabled)
 
     terminal_io.stdout_callback = terminal.stdout
     terminal.stdin_callback = terminal_io.write
