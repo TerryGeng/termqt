@@ -232,11 +232,11 @@ class Terminal(TerminalBuffer, QWidget):
         ind_x = self._cursor_position.x
         ind_y = self._cursor_position.y
         # if cursor is at the right edge of screen, display half of it
-        x = (ind_x if ind_x < self.row_len else (self.row_len - 0.5)) \
-            * self.char_width
-        y = (ind_y - self._buffer_display_offset) \
-            * self.line_height + (self.line_height - self.char_height) \
-            + int(0.2 * self.line_height)
+        x = int((ind_x if ind_x < self.row_len else (self.row_len - 0.5)) \
+                * self.char_width)
+        y = int((ind_y - self._buffer_display_offset) \
+                * self.line_height + (self.line_height - self.char_height) \
+                + 0.2 * self.line_height)
 
         cw = self.char_width
         ch = self.char_height
@@ -486,13 +486,13 @@ class Terminal(TerminalBuffer, QWidget):
 
         if text:
             self.input(text.encode('utf-8'))
-    
+
     def showEvent(self, event):
         super().showEvent(event)
         def resize(*args):
             self.resize(self.size().width(), self.size().height())
         QTimer.singleShot(0, resize)
-    
+
     # ==========================
     #        SCROLL BAR
     # ==========================
