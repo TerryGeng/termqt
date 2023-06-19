@@ -54,7 +54,7 @@ class Terminal(TerminalBuffer, QWidget):
         self.logger = logger if logger else logging.getLogger()
         self.logger.info("Initializing Terminal...")
 
-        TerminalBuffer.__init__(self, 0, 0, logger)
+        TerminalBuffer.__init__(self, 0, 0, self.logger)
 
         # we paint everything to the pixmap first then paint this pixmap
         # on paint event. This allows us to partially update the canvas.
