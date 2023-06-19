@@ -6,9 +6,10 @@ import signal
 import logging
 import threading
 from abc import ABC, abstractmethod
+from .terminal_io import TerminalIO
 
 
-class TerminalIO(ABC):
+class TerminalPOSIXIO(TerminalIO, ABC):
     # This class provides io functions that communciate with the Terminal
     # and the pty (pseudo-tty) of a program.
 
@@ -167,7 +168,7 @@ class TerminalIO(ABC):
             return False
 
 
-class TerminalExecIO(TerminalIO):
+class TerminalPOSIXExecIO(TerminalPOSIXIO):
     def __init__(self, cols: int, rows: int, cmd: str, env=None, logger=None):
         # Initilize.
         #

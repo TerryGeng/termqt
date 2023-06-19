@@ -2,19 +2,21 @@ import os
 import logging
 import threading
 import winpty
+from .terminal_io import TerminalIO
 
 
-class TerminalIO:
+class TerminalWinptyIO(TerminalIO):
     # This class provides io functions that communciate with the Terminal
     # and the pty (pseudo-tty) of a program.
 
-    def __init__(self, cmd: str, cols: int, rows: int, logger=None):
+    def __init__(self, cols: int, rows: int, cmd: str, env=None, logger=None):
         # Initilize.
         #
         # args: cols: columns
         #       rows: rows
         #       cmd: the command to execute.
         #       env: environment variables, if None, set it to os.environ
+        self.env = env if env else os.environ
         self.cmd = cmd
         self.logger = logger if logger else logging.getLogger()
         self.cols = cols
@@ -36,7 +38,7 @@ class TerminalIO:
                 backend=1,
             )
             self.pty_process.setwinsize(self.cols, self.rows)
-            
+
             self._read_thread = threading.Thread(
                 name="TerminalIO Read Loop",
                 target=self._read_loop,
@@ -98,7 +100,7 @@ class TerminalIO:
             return False
 
 
-class TerminalExecIO(TerminalIO):
+class TerminalExecIO(TerminalWinptyIO):
     def __init__(self, cols: int, rows: int, cmd: str, env=None, logger=None):
         # Initilize.
         #
