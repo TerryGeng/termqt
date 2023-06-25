@@ -1114,7 +1114,7 @@ class TerminalBuffer:
             self._alt_line_wrapped_flags = deepcopy(self._line_wrapped_flags)
             self._alt_buffer_display_offset = self._buffer_display_offset
 
-            self.erase_display()
+            self.clear_buffer()
             self.set_cursor_position(0, 0)
         else:
             if not self._alt_buffer:
