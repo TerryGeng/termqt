@@ -1204,45 +1204,19 @@ class TerminalBuffer:
         # Note that this function accepts UTF-8 only (since python use utf-8).
         # Normally modern programs will determine the encoding of its stdout
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
-        for char in string:
-            self._stdout_char(char)
-
-    def _stdout_char(self, char: int):
-        # ret: need_draw
-        try:
-            # self.clear_input_buffer()
-            ret = self.escape_processor.input(char)
-            if ret == 1:
-                return True
-            elif ret == -1:
-                if char == ControlChar.BS.value:
-                    self.backspace()
-                elif char == ControlChar.LF.value:
-                    self.write_at_cursor("\n")
-                elif char == ControlChar.CR.value:
-                    self.carriage_feed()
-                elif char == ControlChar.TAB.value:
-                    self.write_at_cursor("        ")
-                elif char == ControlChar.BEL.value:
-                    # TODO: visual bell
-                    pass
-                elif 32 <= char <= 126 or char >= 128:
-                    self.write_at_cursor(chr(char))
-                else:
-                    self.logger.warn(f"Unhandled char {hex(char)}.")
-                return True
-
-            return False
-
-        except ValueError as e:
-            self.logger.debug(e)
+        self._stdout_string(string)
 
     def _stdout_string(self, string: bytes):
         # ret: need_draw
         need_draw = False
         tst_buf = ""
 
-        for char in string:
+        i = -1
+
+        while i + 1 < len(string):
+            i += 1
+            char = string[i]
+
             try:
                 # self.clear_input_buffer()
                 ret = self.escape_processor.input(char)
@@ -1278,10 +1252,22 @@ class TerminalBuffer:
                     elif char == ControlChar.BEL.value:
                         # TODO: visual bell
                         pass
-                    elif 32 <= char <= 126 or char >= 128:
-                        tst_buf += chr(char)
+
+                    # determing utf-8 char width
+                    elif char & 0xc0 == 0xc0:  # 2-byte, 3-byte, or 4-byte
+                        if char & 0xe0 == 0xe0:  # 3-byte or 4-byte
+                            if char & 0xf0 == 0xf0:  # 4-byte
+                                tst_buf += string[i:i+4].decode("utf-8")
+                                i += 3
+                            else:  # 3-byte
+                                tst_buf += string[i:i+3].decode("utf-8")
+                                i += 2
+                        else:  # 2-byte
+                                tst_buf += string[i:i+2].decode("utf-8")
+                                i += 1
                     else:
-                        self.logger.warn(f"Unhandled char {hex(char)}.")
+                        tst_buf += chr(char)
+
                     need_draw = True
             except ValueError as e:
                 self.logger.debug(e)

@@ -387,9 +387,6 @@ class Terminal(TerminalBuffer, QWidget):
         # from env variable LC_CTYPE and for most systems, it is set to utf-8.
         self._postpone_scroll_update = True
         self._buffer_lock.lock()
-        need_draw = False
-        # for char in string:
-        #     need_draw = self._stdout_char(char) or need_draw
         need_draw = self._stdout_string(string)
         self._buffer_lock.unlock()
         if need_draw:
