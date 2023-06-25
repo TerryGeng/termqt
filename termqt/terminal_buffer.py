@@ -734,16 +734,8 @@ class TerminalBuffer:
         old_buf_col_len = len(self._buffer)
 
         if old_row_len == row_len:
-            filler = col_len - old_buf_col_len
-            if filler > 0:
-                for i in range(filler):
-                    self._buffer.appendleft([None for x in range(row_len)])
-                    self._line_wrapped_flags.appendleft(False)
-                cur_y += filler
-                self._cursor_position = Position(cur_x, cur_y)
-
             self.col_len = col_len
-            self._buffer_display_offset = len(self._buffer) - self.col_len
+            self._buffer_display_offset = max(len(self._buffer) - self.col_len, 0)
             self.update_scroll_position()
 
             self._buffer_lock.unlock()
@@ -881,7 +873,7 @@ class TerminalBuffer:
         self._buffer_lock.unlock()
 
         self.resize_callback(col_len, row_len)
-        # self._log_buffer()
+        self._log_buffer()
 
     def write(self, text, pos: Position = None, set_cursor=False,
               reset_offset=True):
@@ -974,7 +966,7 @@ class TerminalBuffer:
         return 1
 
     def _log_buffer(self):
-        self.logger.info(f"buffer: length: {len(self._buffer)}")
+        self.logger.info(f"buffer: length: {len(self._buffer)}, display offset: {self._buffer_display_offset}")
         self.logger.info("buffer(00): |" +
                          "-" * self.row_len +
                          "|")
