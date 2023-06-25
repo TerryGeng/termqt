@@ -59,7 +59,7 @@ class Terminal(TerminalBuffer, QWidget):
         self.logger = logger if logger else logging.getLogger()
         self.logger.info("Initializing Terminal...")
 
-        TerminalBuffer.__init__(self, 0, 0, logger=logger, **kwargs)
+        TerminalBuffer.__init__(self, 0, 0, logger=self.logger, **kwargs)
 
         # we paint everything to the pixmap first then paint this pixmap
         # on paint event. This allows us to partially update the canvas.
@@ -243,11 +243,11 @@ class Terminal(TerminalBuffer, QWidget):
         ind_x = self._cursor_position.x
         ind_y = self._cursor_position.y
         # if cursor is at the right edge of screen, display half of it
-        x = (ind_x if ind_x < self.row_len else (self.row_len - 0.5)) \
-            * self.char_width
-        y = (ind_y - self._buffer_display_offset) \
-            * self.line_height + (self.line_height - self.char_height) \
-            + int(0.2 * self.line_height)
+        x = int((ind_x if ind_x < self.row_len else (self.row_len - 0.5)) \
+                * self.char_width)
+        y = int((ind_y - self._buffer_display_offset) \
+                * self.line_height + (self.line_height - self.char_height) \
+                + 0.2 * self.line_height)
 
         cw = self.char_width
         ch = self.char_height
