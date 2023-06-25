@@ -1,4 +1,5 @@
 import logging
+import math
 from enum import Enum
 
 from PyQt5.QtWidgets import QWidget, QScrollBar
@@ -7,7 +8,7 @@ from PyQt5.QtGui import QPainter, QColor, QPalette, QFontDatabase, QPen, \
 from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
 
 from .terminal_buffer import TerminalBuffer, DEFAULT_BG_COLOR, \
-    DEFAULT_FG_COLOR, ControlChar
+    DEFAULT_FG_COLOR, ControlChar, Placeholder
 
 
 class CursorState(Enum):
@@ -83,6 +84,7 @@ class Terminal(TerminalBuffer, QWidget):
 
         self.set_bg(DEFAULT_BG_COLOR)
         self.set_fg(DEFAULT_FG_COLOR)
+        self.metrics = None
         self.set_font(font)
         self.setAutoFillBackground(True)
         self.setMinimumSize(width, height)
@@ -148,9 +150,9 @@ class Terminal(TerminalBuffer, QWidget):
 
         font.setPointSize(self.font_size)
         self.font = font
-        metrics = QFontMetrics(font)
-        self.char_width = metrics.horizontalAdvance("A")
-        self.char_height = metrics.height()
+        self.metrics = QFontMetrics(font)
+        self.char_width = self.metrics.horizontalAdvance("A")
+        self.char_height = self.metrics.height()
         self.line_height = int(self.char_height * self._line_height_factor)
 
         self.logger.info(f"font: Font {info.family()} selected, character "
@@ -213,18 +215,20 @@ class Terminal(TerminalBuffer, QWidget):
             ht += lh
             for cn, c in enumerate(row):
                 if c:
-                    ft.setBold(c.bold)
-                    ft.setUnderline(c.underline)
-                    qp.setFont(ft)
-                    if not c.reverse:
-                        qp.fillRect(cn*cw, int(ht - 0.8*ch), cw, lh,
-                                    c.bg_color)
-                        qp.setPen(c.color)
-                        qp.drawText(cn*cw, ht, c.char)
-                    else:
-                        qp.fillRect(cn*cw, int(ht - 0.8*ch), cw, lh, c.color)
-                        qp.setPen(c.bg_color)
-                        qp.drawText(cn*cw, ht, c.char)
+                    if c.placeholder == Placeholder.NON:
+                        ft.setBold(c.bold)
+                        ft.setUnderline(c.underline)
+                        qp.setFont(ft)
+                        if not c.reverse:
+                            qp.fillRect(cn*cw, int(ht - 0.8*ch), cw*c.char_width, lh,
+                                        c.bg_color)
+                            qp.setPen(c.color)
+                            qp.drawText(cn*cw, ht, c.char)
+                        else:
+                            qp.fillRect(cn*cw, int(ht - 0.8*ch), cw*c.char_width, lh,
+                                        c.color)
+                            qp.setPen(c.bg_color)
+                            qp.drawText(cn*cw, ht, c.char)
                 else:
                     qp.setPen(fg_color)
                     ft.setBold(False)
@@ -275,10 +279,23 @@ class Terminal(TerminalBuffer, QWidget):
             * self.line_height
         if ind_x == self.row_len:  # cursor sitting at the edge of screen
             pass
-        elif self._buffer[ind_y][ind_x]:
-            qp.drawText(x, cy, self._buffer[ind_y][ind_x].char)
         else:
-            qp.drawText(x, cy, " ")
+            chr_x = ind_x
+            c = self._buffer[ind_y][chr_x]
+
+            if not c:
+                qp.drawText(x, cy, " ")
+            elif self._cursor_blinking_state == CursorState.OFF or \
+                    c.char_width == 1:
+                while c and c.placeholder != Placeholder.NON:
+                    chr_x -= 1
+                    x -= self.char_width
+                    c = self._buffer[ind_y][chr_x]
+
+                if c:
+                    qp.drawText(x, cy, c.char)
+                else:
+                    qp.drawText(x, cy, " ")
 
         qp.end()
         self._painter_lock.unlock()
@@ -287,6 +304,12 @@ class Terminal(TerminalBuffer, QWidget):
         self._paint_buffer()
         self._paint_cursor()
         self.repaint()
+
+    def get_char_width(self, t):
+        if len(t.encode("utf-8")) == 1:
+            return 1
+        else:
+            return math.ceil(self.metrics.horizontalAdvance(t) / self.char_width)
 
     # ==========================
     #  SCREEN BUFFER FUNCTIONS

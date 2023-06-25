@@ -44,8 +44,28 @@ class ControlChar(Enum):
     ESC = 27  # Ctrl-[, escape
 
 
+
+class Placeholder(Enum):
+    # Placeholder for correctly display double-width characters
+
+    # This character isn't a placeholder
+    NON = 0
+
+    # Placeholder before the double-width character
+    # In the case that current line has no enough space, LEAD
+    # placeholder is inserted to push this character to the next line
+    LEAD = 1
+
+    # Placeholder after the double-width character
+    TAIL = 2
+
+
 class Char(NamedTuple):
     char: str
+    char_width: int
+    placeholder: Placeholder
+
+    # style
     color: QColor = None
     bg_color: QColor = None
     bold: bool = False
@@ -870,10 +890,14 @@ class TerminalBuffer:
         bold, underline, reverse = self._bold, self._underline, self._reversed
         do_auto_wrap = self.auto_wrap_enabled
 
-        char_list = [Char(t, color, bgcolor,
+        char_list = [Char(t, self.get_char_width(t), Placeholder.NON, color, bgcolor,
                           bold, underline, reverse) for t in text]
 
-        for i, t in enumerate(char_list):
+        i = -1
+        while i + 1 < len(char_list):
+            i += 1
+            t = char_list[i]
+
             if t.char == '\n':
                 pos_x = 0
                 pos_y += 1
@@ -882,8 +906,11 @@ class TerminalBuffer:
                     self._line_wrapped_flags.append(False)
                 continue
 
-            if pos_x == row_len:
+            if pos_x + t.char_width > row_len:
                 if do_auto_wrap:
+                    for j in range(row_len - pos_x):
+                        buf[pos_y][pos_x + j] = Char("", 0, Placeholder.LEAD)
+
                     pos_x = 0
                     pos_y += 1
                     self._line_wrapped_flags[pos_y - 1] = True
@@ -891,10 +918,13 @@ class TerminalBuffer:
                         buf.append([None for x in range(self.row_len)])
                         self._line_wrapped_flags.append(False)
                 else:
-                    pos_x -= 1
+                    pos_x = row_len - t.char_width
 
             buf[pos_y][pos_x] = t
-            pos_x += 1  # could result in pos_x == row_len when exiting loop
+            for j in range(1, t.char_width):
+                buf[pos_y][pos_x + j] = Char("", 0, Placeholder.TAIL)
+
+            pos_x += t.char_width  # could result in pos_x == row_len when exiting loop
 
         while len(self._buffer) > self.maximum_line_history:
             buf.popleft()
@@ -923,6 +953,9 @@ class TerminalBuffer:
                     self._buffer_display_offset + y_from_screen_top - self.col_len + 1,
                     len(self._buffer) - self.col_len)
             self.update_scroll_position_postponed()
+
+    def get_char_width(self, char):
+        return 1
 
     def _log_buffer(self):
         self.logger.info(f"buffer: length: {len(self._buffer)}")
