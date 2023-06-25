@@ -794,7 +794,11 @@ class TerminalBuffer:
                         new_y += 1
                         new_x = 0
 
-            for x, c in enumerate(old_row):
+            x = -1
+            while x + 1 < len(old_row):
+                x += 1
+                c = old_row[x]
+
                 # clear _breaked_ flag
                 # note that it should only be set when the new row length
                 # is the integer multiple of the length of the old row
@@ -802,16 +806,28 @@ class TerminalBuffer:
                 # inserted
                 breaked = False
 
-                _new_buffer[new_y][new_x] = c
+                if c and c.placeholder == Placeholder.LEAD:
+                    continue
 
-                new_x += 1
+                width = c.char_width if c else 1
+
+                if new_x + width > row_len:
+                    # char too wide to fit into this row
+                    while new_x < row_len:
+                        _new_buffer[new_y][new_x] = Char("", 0, Placeholder.LEAD)
+                        new_x += 1
+                    x -= 1
+                else:
+                    _new_buffer[new_y][new_x] = c
+                    new_x += 1
 
                 if new_x >= row_len:
                     if not do_auto_wrap:
                         new_x = row_len - 1
                         continue
 
-                    empty_ahead = all(map(lambda c: not c, old_row[x+1:]))
+                    empty_ahead = all(map(lambda c: not c or c.placeholder != Placeholder.NON,
+                                          old_row[x+1:]))
 
                     if y == old_buf_col_len - 1 and empty_ahead:
                         # avoid creating extra new lines after last line
