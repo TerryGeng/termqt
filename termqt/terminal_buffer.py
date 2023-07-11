@@ -4,8 +4,8 @@ from enum import Enum
 from functools import partial
 from collections import deque
 
-from PyQt5.QtGui import QColor
-from PyQt5.QtCore import Qt, QMutex
+from Qt.QtGui import QColor
+from Qt.QtCore import Qt, QMutex
 
 from .colors import colors8, colors16, colors256
 

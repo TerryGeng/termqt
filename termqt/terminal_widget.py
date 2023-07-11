@@ -2,10 +2,10 @@ import logging
 import math
 from enum import Enum
 
-from PyQt5.QtWidgets import QWidget, QScrollBar
-from PyQt5.QtGui import QPainter, QColor, QPalette, QFontDatabase, QPen, \
-    QFont, QFontInfo, QFontMetrics, QPixmap
-from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
+from Qt.QtWidgets import QWidget, QScrollBar
+from Qt.QtGui import (QPainter, QColor, QPalette, QFontDatabase, 
+                      QPen, QFont, QFontInfo, QFontMetrics, QPixmap)
+from Qt.QtCore import Qt, QTimer, QMutex, Signal
 
 from .terminal_buffer import TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar, Placeholder
@@ -26,20 +26,20 @@ class Terminal(TerminalBuffer, QWidget):
     #       thread, Qt will crash immediately. Just don't do that.
 
     # signal for triggering a on-canvas buffer repaint
-    buffer_repaint_sig = pyqtSignal()
+    buffer_repaint_sig = Signal()
 
     # signal for triggering a on-canvas cursor repaint
-    cursor_repaint_sig = pyqtSignal()
+    cursor_repaint_sig = Signal()
 
     # signal for triggering a repaint for both the canvas and the widget
-    total_repaint_sig = pyqtSignal()
+    total_repaint_sig = Signal()
 
     # internal signal for triggering stdout routine for buffering and
     # painting. Note: Use stdout() method.
-    _stdout_sig = pyqtSignal(bytes)
+    _stdout_sig = Signal(bytes)
 
     # update scroll bar
-    update_scroll_sig = pyqtSignal()
+    update_scroll_sig = Signal()
 
     def __init__(self,
                  width,
