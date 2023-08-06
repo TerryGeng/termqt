@@ -873,7 +873,7 @@ class TerminalBuffer:
         self._buffer_lock.unlock()
 
         self.resize_callback(col_len, row_len)
-        self._log_buffer()
+        # self._log_buffer()
 
     def write(self, text, pos: Position = None, set_cursor=False,
               reset_offset=True):
