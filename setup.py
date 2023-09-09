@@ -10,7 +10,7 @@ setup(
     description="A terminal emulator widget built on PyQt5.",
     keywords="terminal emulator pyqt",
     url="https://github.com/TerryGeng/termqt",
-    install_requires=("PyQt5", "PyQt5-sip", "Qt.py"),
+    install_requires=("PyQt5", "PyQt5-sip", "Qt.py", "pywinpty; platform_system=='Windows'"),
     classifiers=[
         "Environment :: X11 Applications :: Qt",
         "Operating System :: POSIX",
