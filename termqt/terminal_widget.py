@@ -306,15 +306,19 @@ class Terminal(TerminalBuffer, QWidget):
                     # Process mixed lines
                     for cn, c in enumerate(row):
                         if c:
+
                             is_selected = False
                             if real_ln == start_row and real_ln == end_row:
-                                # Single character selection
-                                is_selected = cn == start_col and cn == end_col
+                                is_selected = start_col <= cn <= end_col
                             elif real_ln == start_row:
                                 is_selected = cn >= start_col
                             elif real_ln == end_row:
                                 is_selected = cn <= end_col
+                            else:
+                                is_selected = True
+
                             bgcolor = self.selection_color if is_selected else c.bg_color
+
                             # Start of character rendering
                             ft.setBold(c.bold)
                             ft.setUnderline(c.underline)
@@ -329,6 +333,7 @@ class Terminal(TerminalBuffer, QWidget):
                     bgcolor = self.selection_color
                     for cn, c in enumerate(row):
                         if c:
+
                             # Start of character rendering
                             ft.setBold(c.bold)
                             ft.setUnderline(c.underline)
