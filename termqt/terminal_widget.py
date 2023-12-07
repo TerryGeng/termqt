@@ -7,7 +7,7 @@ from PyQt5.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
                       QPen, QFont, QFontInfo, QFontMetrics, QPixmap)
 from PyQt5.QtCore import Qt, QTimer, QMutex, pyqtSignal
 
-import .colors
+from . import colors
 
 from .terminal_buffer import Position, TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar, Placeholder
