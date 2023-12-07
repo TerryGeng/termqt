@@ -7,10 +7,10 @@ from Qt.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
                       QPen, QFont, QFontInfo, QFontMetrics, QPixmap)
 from Qt.QtCore import Qt, QTimer, QMutex, Signal
 
-from . import colors
-
 from .terminal_buffer import Position, TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar, Placeholder
+
+SELECTION_BG_COLOR = Qt.cyan
 
 
 class CursorState(Enum):
@@ -86,6 +86,7 @@ class Terminal(TerminalBuffer, QWidget):
 
         self.set_bg(DEFAULT_BG_COLOR)
         self.set_fg(DEFAULT_FG_COLOR)
+        self.selection_color = SELECTION_BG_COLOR
         self.metrics = None
         self.set_font(font)
         self.setAutoFillBackground(True)
@@ -290,7 +291,7 @@ class Terminal(TerminalBuffer, QWidget):
                     is_selected = self._is_selected(cn, real_ln)
                     alt_bgcolor = None
                     if is_selected:
-                        alt_bgcolor = colors.colors8[36]
+                        alt_bgcolor = self.selection_color
 
                     if c.placeholder == Placeholder.NON:
                         ft.setBold(c.bold)
