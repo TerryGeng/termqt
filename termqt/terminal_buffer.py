@@ -661,13 +661,22 @@ class TerminalBuffer:
 
         self.create_buffer(row_len, col_len)
 
-
     # Add methods to manage selection state
-    def set_selection_start(self, position):
-        self._selection_start = position
 
-    def set_selection_end(self, position):
-        self._selection_end = position
+    def set_selection_start(self, start_position):
+        self._selection_start = start_position
+        self._selection_end = start_position
+
+    def set_selection_end(self, end_position):
+        self._selection_end = end_position
+
+    def set_selection_finish(self, end_position):
+        self.set_selection_end(end_position)
+
+        start_col, start_row = self._selection_start
+        end_col, end_row = self._selection_end
+        if (start_row, start_col) == (end_row, end_col):
+            self._selection_start = self._selection_end = None
 
     def reset_selection(self):
         self._selection_start = None
