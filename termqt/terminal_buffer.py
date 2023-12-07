@@ -4,8 +4,8 @@ from enum import Enum
 from functools import partial
 from collections import deque
 
-from Qt.QtGui import QColor
-from Qt.QtCore import Qt, QMutex
+from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, QMutex
 
 from .colors import colors8, colors16, colors256
 
@@ -637,6 +637,10 @@ class TerminalBuffer:
         self._alt_buffer_display_offset = None
         self._alt_cursor_position = Position(0, 0)
 
+        # selection
+        self._selection_start = None
+        self._selection_end = None
+        
         # scroll bar
         self._postpone_scroll_update = False
         self._scroll_update_pending = False
@@ -656,6 +660,48 @@ class TerminalBuffer:
         self.maximum_line_history = 5000
 
         self.create_buffer(row_len, col_len)
+
+
+    # Add methods to manage selection state
+    def set_selection_start(self, position):
+        self._selection_start = position
+
+    def set_selection_end(self, position):
+        self._selection_end = position
+
+    def reset_selection(self):
+        self._selection_start = None
+        self._selection_end = None
+
+    def get_selection(self):
+        # Ensure the selection is ordered correctly
+        if self._selection_start and self._selection_end:
+            start = min(self._selection_start, self._selection_end)
+            end = max(self._selection_start, self._selection_end)
+            return start, end
+        return None, None
+
+    def _get_selected_text(self):
+        start, end = self.get_selection()
+        if start and end:
+            selected_text = ""
+            for row in range(start.y, end.y + 1):
+                if 0 <= row < len(self._buffer):
+                    line = self._buffer[row]
+                    line_text = ""
+                    for col in range(len(line)):
+                        if start.y == end.y:
+                            if start.x <= col <= end.x:
+                                line_text += line[col].char if line[col] else ' '
+                        elif row == start.y and col >= start.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif row == end.y and col <= end.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif start.y < row < end.y:
+                            line_text += line[col].char if line[col] else ' '
+                    selected_text += line_text + '\n'
+            return selected_text.strip('\n')
+        return ""
 
     def _register_escape_callbacks(self):
         ep = self.escape_processor
