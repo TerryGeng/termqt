@@ -87,6 +87,7 @@ class Terminal(TerminalBuffer, QWidget):
         self.set_bg(DEFAULT_BG_COLOR)
         self.set_fg(DEFAULT_FG_COLOR)
         self.selection_color = SELECTION_BG_COLOR
+        self.enable_selection_keys = True
         self.metrics = None
         self.set_font(font)
         self.setAutoFillBackground(True)
@@ -157,7 +158,20 @@ class Terminal(TerminalBuffer, QWidget):
         copy_all_action.triggered.connect(self._copy_all)
         menu.addAction(copy_all_action)
 
+        paste_action = QAction("Paste", self)
+        paste_action.triggered.connect(self._paste_from_clipboard)
+        menu.addAction(paste_action)
+
         menu.exec_(self.mapToGlobal(position))
+
+    def _paste_from_clipboard(self):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        if text:
+            # Or any other method you use to handle input
+            self.input(text.encode('utf-8'))
+            return True
+        return False
 
     def _copy_all(self):
         all_text = self._get_all_text_rstrip()
@@ -592,12 +606,30 @@ class Terminal(TerminalBuffer, QWidget):
                 elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
                     self.input(ControlChar.BS.value)
                 elif key == Qt.Key_Escape:
-                    self.input(ControlChar.ESC.value)
+
+                    # Deselect with ESC if there is a selection
+                    if self.enable_selection_keys and self._selection_start is not None:
+                        self.reset_selection()
+                    else:
+                        self.input(ControlChar.ESC.value)
                 else:
                     break  # avoid the execution of 'return'
                 return
+
         elif modifiers == Qt.ControlModifier or modifiers == Qt.MetaModifier:
-            if key == Qt.Key_A:
+
+            # Paste with Ctrl+V (or Command+V on macOS)
+            pasted = False
+            if self.enable_selection_keys and event.key() == Qt.Key_V:
+                pasted = self._paste_from_clipboard()
+            if pasted:
+                pass
+
+            # Copy with Ctrl+C (or Command+C on macOS)
+            elif self.enable_selection_keys and event.key() == Qt.Key_C and self._selection_start is not None:
+                self._copy_selection()
+
+            elif key == Qt.Key_A:
                 self.input(ControlChar.SOH.value)
             elif key == Qt.Key_B:
                 self.input(ControlChar.STX.value)
