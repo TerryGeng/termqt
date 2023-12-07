@@ -173,12 +173,12 @@ class Terminal(TerminalBuffer, QWidget):
         menu.exec_(self.mapToGlobal(position))
 
     def _copy_all(self):
-        all_text = self._get_all_text()
+        all_text = self._get_all_text_rstrip()
         clipboard = QApplication.clipboard()
         clipboard.setText(all_text)
 
     def _copy_selection(self):
-        selected_text = self._get_selected_text()
+        selected_text = self._get_selected_text_rstrip()
         clipboard = QApplication.clipboard()
         clipboard.setText(selected_text)
 
@@ -339,10 +339,10 @@ class Terminal(TerminalBuffer, QWidget):
         ind_x = self._cursor_position.x
         ind_y = self._cursor_position.y
         # if cursor is at the right edge of screen, display half of it
-        x = int((ind_x if ind_x < self.row_len else (self.row_len - 0.5)) \
+        x = int((ind_x if ind_x < self.row_len else (self.row_len - 0.5))
                 * self.char_width)
-        y = int((ind_y - self._buffer_display_offset) \
-                * self.line_height + (self.line_height - self.char_height) \
+        y = int((ind_y - self._buffer_display_offset)
+                * self.line_height + (self.line_height - self.char_height)
                 + 0.2 * self.line_height)
 
         cw = self.char_width
@@ -612,6 +612,7 @@ class Terminal(TerminalBuffer, QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+
         def resize(*args):
             self.resize(self.size().width(), self.size().height())
         QTimer.singleShot(0, resize)

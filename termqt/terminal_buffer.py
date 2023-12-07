@@ -703,12 +703,46 @@ class TerminalBuffer:
             return selected_text.strip('\n')
         return ""
 
+    def _get_selected_text_rstrip(self):
+        start, end = self.get_selection()
+        if start and end:
+            selected_text = ""
+            for row in range(start.y, end.y + 1):
+                if 0 <= row < len(self._buffer):
+                    line = self._buffer[row]
+                    line_text = ""
+                    for col in range(len(line)):
+                        if start.y == end.y:
+                            if start.x <= col <= end.x:
+                                line_text += line[col].char if line[col] else ' '
+                        elif row == start.y and col >= start.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif row == end.y and col <= end.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif start.y < row < end.y:
+                            line_text += line[col].char if line[col] else ' '
+                    selected_text += line_text.rstrip() + '\n'
+            return selected_text.strip('\n')
+        return ""
+
     def _get_all_text(self):
         all_text = ""
         for row in self._buffer:
             line_text = ''.join(c.char if c else ' ' for c in row)
             all_text += line_text + '\n'
         return all_text.strip('\n')
+
+    def _get_all_text_rstrip(self):
+        all_text = []
+        for row in self._buffer:
+            line_text = ''.join(c.char if c else ' ' for c in row).rstrip()
+            all_text.append(line_text)
+
+        # Remove empty lines at the end of the buffer
+        while all_text and not all_text[-1]:
+            all_text.pop()
+
+        return '\n'.join(all_text)
 
     def _register_escape_callbacks(self):
         ep = self.escape_processor
