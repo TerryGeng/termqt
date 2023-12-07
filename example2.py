@@ -1,5 +1,4 @@
 import sys
-import logging
 import platform
 from PyQt5.QtWidgets import QApplication, QWidget, QHBoxLayout, QTabWidget, QVBoxLayout, QPushButton, QScrollBar
 from PyQt5.QtCore import Qt, QCoreApplication
@@ -10,8 +9,8 @@ from termqt.termqt.terminal_io_posix import TerminalPOSIXExecIO
 
 
 class TerminalTabWidget(QWidget):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.layout = QVBoxLayout(self)
 
         self.tabs = QTabWidget()
