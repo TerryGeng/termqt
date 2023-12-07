@@ -157,7 +157,20 @@ class Terminal(TerminalBuffer, QWidget):
         copy_all_action.triggered.connect(self._copy_all)
         menu.addAction(copy_all_action)
 
+        paste_action = QAction("Paste", self)
+        paste_action.triggered.connect(self._paste_from_clipboard)
+        menu.addAction(paste_action)
+
         menu.exec_(self.mapToGlobal(position))
+
+    def _paste_from_clipboard(self):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        if text:
+            # Or any other method you use to handle input
+            self.input(text.encode('utf-8'))
+            return True
+        return False
 
     def _copy_all(self):
         all_text = self._get_all_text_rstrip()
