@@ -24,7 +24,7 @@ class TerminalTabWidget(QWidget):
 
     def addTerminalTab_button(self):
         if platform.system() == "Windows":
-            self.addTerminalTab('cmd', 'bash')
+            self.addTerminalTab('cmd', 'cmd')
         else:
             self.addTerminalTab('/bin/bash', 'bash')
 
