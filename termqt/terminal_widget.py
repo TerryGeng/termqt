@@ -87,6 +87,7 @@ class Terminal(TerminalBuffer, QWidget):
         self.set_bg(DEFAULT_BG_COLOR)
         self.set_fg(DEFAULT_FG_COLOR)
         self.selection_color = SELECTION_BG_COLOR
+        self.enable_selection_keys = True
         self.metrics = None
         self.set_font(font)
         self.setAutoFillBackground(True)
@@ -586,12 +587,30 @@ class Terminal(TerminalBuffer, QWidget):
                 elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
                     self.input(ControlChar.BS.value)
                 elif key == Qt.Key_Escape:
-                    self.input(ControlChar.ESC.value)
+
+                    # Deselect with ESC if there is a selection
+                    if self.enable_selection_keys and self._selection_start is not None:
+                        self.reset_selection()
+                    else:
+                        self.input(ControlChar.ESC.value)
                 else:
                     break  # avoid the execution of 'return'
                 return
+
         elif modifiers == Qt.ControlModifier or modifiers == Qt.MetaModifier:
-            if key == Qt.Key_A:
+
+            # Paste with Ctrl+V (or Command+V on macOS)
+            pasted = False
+            if self.enable_selection_keys and event.key() == Qt.Key_V:
+                pasted = self._paste_from_clipboard()
+            if pasted:
+                pass
+
+            # Copy with Ctrl+C (or Command+C on macOS)
+            elif self.enable_selection_keys and event.key() == Qt.Key_C and self._selection_start is not None:
+                self._copy_selection()
+
+            elif key == Qt.Key_A:
                 self.input(ControlChar.SOH.value)
             elif key == Qt.Key_B:
                 self.input(ControlChar.STX.value)
