@@ -142,10 +142,21 @@ class Terminal(TerminalBuffer, QWidget):
 
     def _show_context_menu(self, position):
         menu = QMenu(self)
+
         copy_action = QAction("Copy", self)
         copy_action.triggered.connect(self._copy_selection)
         menu.addAction(copy_action)
+
+        copy_all_action = QAction("Copy All", self)
+        copy_all_action.triggered.connect(self._copy_all)
+        menu.addAction(copy_all_action)
+
         menu.exec_(self.mapToGlobal(position))
+
+    def _copy_all(self):
+        all_text = self._get_all_text()
+        clipboard = QApplication.clipboard()
+        clipboard.setText(all_text)
 
     def _copy_selection(self):
         selected_text = self._get_selected_text()

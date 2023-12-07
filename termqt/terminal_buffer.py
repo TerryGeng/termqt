@@ -703,6 +703,13 @@ class TerminalBuffer:
             return selected_text.strip('\n')
         return ""
 
+    def _get_all_text(self):
+        all_text = ""
+        for row in self._buffer:
+            line_text = ''.join(c.char if c else ' ' for c in row)
+            all_text += line_text + '\n'
+        return all_text.strip('\n')
+
     def _register_escape_callbacks(self):
         ep = self.escape_processor
         ep.erase_display_cb = self.erase_display
