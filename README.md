@@ -9,6 +9,8 @@ it can run IPython and perhaps more usual applications.
 
 <img src="screenshots/screenshot-1.jpg" alt="Screenshot" style="zoom:50%;" />
 
+<img src="screenshots/example2.png" alt="Screenshot" style="zoom:50%;" />
+
 It is worth noting that is project is still work-in-progress and more necessary features shall be added
 in coming weeks.
 
