@@ -53,7 +53,8 @@ class TerminalWinptyIO(TerminalIO):
         try:
             self.cols = cols
             self.rows = rows
-            self.pty_process.setwinsize(self.rows, self.cols)
+            if self.running:
+                self.pty_process.setwinsize(self.rows, self.cols)
         except (OSError, AssertionError):
             self.running = False
             self.terminated_callback()
