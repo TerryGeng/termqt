@@ -157,6 +157,25 @@ class Terminal(TerminalBuffer, QWidget):
         row = int((pos.y() - self._padding / 2) / self.line_height)
         return Position(col, row + self._buffer_display_offset)
 
+    def wheelEvent(self, event):
+        # Number of lines to scroll per wheel step
+        lines_per_step = 3
+
+        # Calculate the scroll amount (positive for scroll up, negative for down)
+        scroll_amount = event.angleDelta().y() // 120 * lines_per_step
+
+        # Update buffer display offset
+        self._buffer_display_offset = max(0, min(
+            self._buffer_display_offset - scroll_amount, len(self._buffer) - self.col_len))
+
+        # Update the terminal display
+        self._paint_buffer()
+        self.repaint()
+
+        # Update scroll bar position if it exists
+        if self.scroll_bar:
+            self.update_scroll_position()
+
     def set_bg(self, color: QColor):
         TerminalBuffer.set_bg(self, color)
 
