@@ -6,6 +6,7 @@ from PyQt5.QtCore import Qt, QCoreApplication
 
 from termqt.termqt import Terminal
 from termqt.termqt.terminal_io_windows import TerminalWinptyIO
+from termqt.termqt.terminal_io_posix import TerminalPOSIXExecIO
 
 
 class TerminalTabWidget(QWidget):
@@ -23,7 +24,10 @@ class TerminalTabWidget(QWidget):
         self.layout.addWidget(self.addButton)
 
     def addTerminalTab_button(self):
-        self.addTerminalTab('cmd', 'cmd')
+        if platform.system() == "Windows":
+            self.addTerminalTab('cmd', 'bash')
+        else:
+            self.addTerminalTab('/bin/bash', 'bash')
 
     def addTerminalTab(self, cmd, title=None):
         terminal, scroll, terminal_io = self.createTerminal(cmd)
@@ -66,16 +70,11 @@ class TerminalTabWidget(QWidget):
                 cmd
             )
         else:
-            # Add appropriate handling for non-Windows systems
-            # bin = "/bin/bash"
-            # from termqt.termqt import TerminalPOSIXExecIO
-            # terminal_io = TerminalPOSIXExecIO(
-            #     terminal.row_len,
-            #     terminal.col_len,
-            #     bin,
-            #     logger=logger
-            # )
-            pass
+            terminal_io = TerminalPOSIXExecIO(
+                terminal.row_len,
+                terminal.col_len,
+                cmd
+            )
 
         terminal_io.stdout_callback = terminal.stdout
         terminal.stdin_callback = terminal_io.write
