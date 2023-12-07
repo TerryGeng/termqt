@@ -2,12 +2,14 @@ import logging
 import math
 from enum import Enum
 
-from Qt.QtWidgets import QWidget, QScrollBar
-from Qt.QtGui import (QPainter, QColor, QPalette, QFontDatabase, 
+from Qt.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication
+from Qt.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
                       QPen, QFont, QFontInfo, QFontMetrics, QPixmap)
 from Qt.QtCore import Qt, QTimer, QMutex, Signal
 
-from .terminal_buffer import TerminalBuffer, DEFAULT_BG_COLOR, \
+from . import colors
+
+from .terminal_buffer import Position, TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar, Placeholder
 
 
@@ -134,6 +136,46 @@ class Terminal(TerminalBuffer, QWidget):
         if self.scroll_bar:
             self.update_scroll_position()
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = self._map_pixel_to_cell(event.pos())
+            self.set_selection_start(pos)
+            self.set_selection_end(pos)
+            self._paint_buffer()
+            self._restore_cursor_state()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            pos = self._map_pixel_to_cell(event.pos())
+            self.set_selection_end(pos)
+            self._paint_buffer()
+            self._restore_cursor_state()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self._show_context_menu(event.pos())
+
+        if event.buttons() & Qt.LeftButton:
+            self._paint_buffer()
+            self._restore_cursor_state()
+
+    def _show_context_menu(self, position):
+        menu = QMenu(self)
+        copy_action = QAction("Copy", self)
+        copy_action.triggered.connect(self._copy_selection)
+        menu.addAction(copy_action)
+        menu.exec_(self.mapToGlobal(position))
+
+    def _copy_selection(self):
+        selected_text = self._get_selected_text()
+        clipboard = QApplication.clipboard()
+        clipboard.setText(selected_text)
+
+    def _map_pixel_to_cell(self, pos):
+        col = int((pos.x() - self._padding / 2) / self.char_width)
+        row = int((pos.y() - self._padding / 2) / self.line_height)
+        return Position(col, row + self._buffer_display_offset)
+
     def set_bg(self, color: QColor):
         TerminalBuffer.set_bg(self, color)
 
@@ -229,23 +271,28 @@ class Terminal(TerminalBuffer, QWidget):
             if real_ln < 0 or real_ln >= len(self._buffer):
                 break
 
-            row = self._buffer[ln + offset]
+            row = self._buffer[real_ln]
 
             ht += lh
             for cn, c in enumerate(row):
                 if c:
+                    is_selected = self._is_selected(cn, real_ln)
+                    alt_bgcolor = None
+                    if is_selected:
+                        alt_bgcolor = colors.colors8[36]
+
                     if c.placeholder == Placeholder.NON:
                         ft.setBold(c.bold)
                         ft.setUnderline(c.underline)
                         qp.setFont(ft)
                         if not c.reverse:
                             qp.fillRect(cn*cw, int(ht - 0.8*ch), cw*c.char_width, lh,
-                                        c.bg_color)
+                                        alt_bgcolor or c.bg_color)
                             qp.setPen(c.color)
                             qp.drawText(cn*cw, ht, c.char)
                         else:
                             qp.fillRect(cn*cw, int(ht - 0.8*ch), cw*c.char_width, lh,
-                                        c.color)
+                                        alt_bgcolor or c.color)
                             qp.setPen(c.bg_color)
                             qp.drawText(cn*cw, ht, c.char)
                 else:
@@ -257,6 +304,21 @@ class Terminal(TerminalBuffer, QWidget):
         qp.end()
 
         self._painter_lock.unlock()
+
+    def _is_selected(self, col, row):
+        if not self._selection_start or not self._selection_end:
+            return False
+        start_col, start_row = self._selection_start
+        end_col, end_row = self._selection_end
+        if start_row <= row <= end_row:
+            if row == start_row and row == end_row:
+                return start_col <= col <= end_col
+            elif row == start_row:
+                return col >= start_col
+            elif row == end_row:
+                return col <= end_col
+            return True
+        return False
 
     def _paint_cursor(self):
         if not self._buffer:
