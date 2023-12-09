@@ -82,6 +82,8 @@ class TerminalWinptyIO(TerminalIO):
                     self.stdout_callback(bytes(buf, 'utf-8'))
                 else:
                     self.stdout_callback(buf)
+        except EOFError:
+            pass
         finally:
             self.logger.info("Spawned process has been killed")
             if self.running:
