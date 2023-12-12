@@ -637,6 +637,10 @@ class TerminalBuffer:
         self._alt_buffer_display_offset = None
         self._alt_cursor_position = Position(0, 0)
 
+        # selection
+        self._selection_start = None
+        self._selection_end = None
+
         # scroll bar
         self._postpone_scroll_update = False
         self._scroll_update_pending = False
@@ -656,6 +660,98 @@ class TerminalBuffer:
         self.maximum_line_history = 5000
 
         self.create_buffer(row_len, col_len)
+
+    # Add methods to manage selection state
+
+    def set_selection_start(self, start_position):
+        self._selection_start = start_position
+        self._selection_end = start_position
+
+    def set_selection_end(self, end_position):
+        self._selection_end = end_position
+
+    def set_selection_finish(self, end_position):
+        self.set_selection_end(end_position)
+
+        start_col, start_row = self._selection_start
+        end_col, end_row = self._selection_end
+        if (start_row, start_col) == (end_row, end_col):
+            self._selection_start = self._selection_end = None
+
+    def reset_selection(self):
+        self._selection_start = None
+        self._selection_end = None
+
+    def get_selection(self):
+        # Ensure the selection is ordered correctly
+        if self._selection_start and self._selection_end:
+            start = min(self._selection_start, self._selection_end)
+            end = max(self._selection_start, self._selection_end)
+            return start, end
+        return None, None
+
+    def _get_selected_text(self):
+        start, end = self.get_selection()
+        if start and end:
+            selected_text = ""
+            for row in range(start.y, end.y + 1):
+                if 0 <= row < len(self._buffer):
+                    line = self._buffer[row]
+                    line_text = ""
+                    for col in range(len(line)):
+                        if start.y == end.y:
+                            if start.x <= col <= end.x:
+                                line_text += line[col].char if line[col] else ' '
+                        elif row == start.y and col >= start.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif row == end.y and col <= end.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif start.y < row < end.y:
+                            line_text += line[col].char if line[col] else ' '
+                    selected_text += line_text + '\n'
+            return selected_text.strip('\n')
+        return ""
+
+    def _get_selected_text_rstrip(self):
+        start, end = self.get_selection()
+        if start and end:
+            selected_text = ""
+            for row in range(start.y, end.y + 1):
+                if 0 <= row < len(self._buffer):
+                    line = self._buffer[row]
+                    line_text = ""
+                    for col in range(len(line)):
+                        if start.y == end.y:
+                            if start.x <= col <= end.x:
+                                line_text += line[col].char if line[col] else ' '
+                        elif row == start.y and col >= start.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif row == end.y and col <= end.x:
+                            line_text += line[col].char if line[col] else ' '
+                        elif start.y < row < end.y:
+                            line_text += line[col].char if line[col] else ' '
+                    selected_text += line_text.rstrip() + '\n'
+            return selected_text.strip('\n')
+        return ""
+
+    def _get_all_text(self):
+        all_text = ""
+        for row in self._buffer:
+            line_text = ''.join(c.char if c else ' ' for c in row)
+            all_text += line_text + '\n'
+        return all_text.strip('\n')
+
+    def _get_all_text_rstrip(self):
+        all_text = []
+        for row in self._buffer:
+            line_text = ''.join(c.char if c else ' ' for c in row).rstrip()
+            all_text.append(line_text)
+
+        # Remove empty lines at the end of the buffer
+        while all_text and not all_text[-1]:
+            all_text.pop()
+
+        return '\n'.join(all_text)
 
     def _register_escape_callbacks(self):
         ep = self.escape_processor
