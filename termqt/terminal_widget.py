@@ -139,31 +139,30 @@ class Terminal(TerminalBuffer, QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            pos = self._map_pixel_to_cell(event.pos())
+            pos = self._align_to_rightmost_char(
+                    self._map_pixel_to_cell(event.pos())
+                    )
             self.set_selection_start(pos)
-            self.set_selection_end(pos)
+            self._selection_end = None
 
             self._paint_buffer()
             self._restore_cursor_state()
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
-            pos = self._map_pixel_to_cell(event.pos())
-            self.set_selection_end(pos)
+            if self._selection_start is not None:
+                pos = self._align_to_rightmost_char(
+                        self._map_pixel_to_cell(event.pos())
+                        )
+                if pos.y < len(self._buffer) and pos != self._selection_end:
+                    self.set_selection_end(pos)
 
-            self._paint_buffer()
-            self._restore_cursor_state()
+                    self._paint_buffer()
+                    self._restore_cursor_state()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.RightButton:
             self._show_context_menu(event.pos())
-
-        if self._selection_start is not None:
-            pos = self._map_pixel_to_cell(event.pos())
-            self.set_selection_finish(pos)
-
-            self._paint_buffer()
-            self._restore_cursor_state()
 
     def _show_context_menu(self, position):
         menu = QMenu(self)
@@ -192,6 +191,13 @@ class Terminal(TerminalBuffer, QWidget):
         col = int((pos.x() - self._padding / 2) / self.char_width)
         row = int((pos.y() - self._padding / 2) / self.line_height)
         return Position(col, row + self._buffer_display_offset)
+
+    def _align_to_rightmost_char(self, pos):
+        col, row = pos
+        while not self._buffer[row][col] and col > 0:
+            col -= 1
+
+        return Position(col, row)
 
     def set_bg(self, color: QColor):
         TerminalBuffer.set_bg(self, color)
@@ -283,15 +289,17 @@ class Terminal(TerminalBuffer, QWidget):
 
         qp.fillRect(self.rect(), DEFAULT_BG_COLOR)
 
-        # Calculate selection bounds
-        if self._selection_start and self._selection_end:
+        in_selection = False
+        start_col = start_row = end_col = end_row = None
+
+        if self._selection_end:
+            assert self._selection_start
             start_col, start_row = self._selection_start
             end_col, end_row = self._selection_end
+
             if (start_row, start_col) > (end_row, end_col):
                 start_row, end_row = end_row, start_row
                 start_col, end_col = end_col, start_col
-        else:
-            start_col = start_row = end_col = end_row = None
 
         for ln in range(self.col_len):
             real_ln = ln + offset
@@ -299,65 +307,51 @@ class Terminal(TerminalBuffer, QWidget):
                 break
 
             row = self._buffer[real_ln]
+
             ht += lh
 
-            if start_row is not None and start_row <= real_ln <= end_row:
-                if real_ln == start_row or real_ln == end_row:
-                    # Process mixed lines
-                    for cn, c in enumerate(row):
-                        if c:
+            in_selection_edge_row = False
 
-                            is_selected = False
-                            if real_ln == start_row and real_ln == end_row:
-                                is_selected = start_col <= cn <= end_col
-                            elif real_ln == start_row:
-                                is_selected = cn >= start_col
-                            elif real_ln == end_row:
-                                is_selected = cn <= end_col
-                            else:
-                                is_selected = True
-
-                            bgcolor = self.selection_color if is_selected else c.bg_color
-
-                            # Start of character rendering
-                            ft.setBold(c.bold)
-                            ft.setUnderline(c.underline)
-                            qp.setFont(ft)
-                            qp.fillRect(cn*cw, int(ht - 0.8*ch),
-                                        cw*c.char_width, lh, bgcolor)
-                            qp.setPen(c.color if not c.reverse else c.bg_color)
-                            qp.drawText(cn*cw, ht, c.char)
-                            # End of character rendering
+            if not in_selection and start_row is not None \
+                    and start_row == real_ln:
+                if start_col > 0:
+                    in_selection_edge_row = True
                 else:
-                    # Process fully selected lines
-                    bgcolor = self.selection_color
-                    for cn, c in enumerate(row):
-                        if c:
+                    in_selection = True
+            if in_selection:
+                if end_row == real_ln:
+                    if end_col < self.row_len - 1:
+                        in_selection_edge_row = True
+                elif end_row < real_ln:
+                    in_selection = False
 
-                            # Start of character rendering
-                            ft.setBold(c.bold)
-                            ft.setUnderline(c.underline)
-                            qp.setFont(ft)
+            for cn, c in enumerate(row):
+                if c:
+                    if in_selection_edge_row:
+                        if not in_selection and cn == start_col:
+                            in_selection = True
+                            in_selection_edge_row = (end_row == real_ln)
+                        elif in_selection and cn == end_col + 1:
+                            in_selection = False
+                            in_selection_edge_row = False
+
+                    bgcolor = c.bg_color if not in_selection else self.selection_color
+
+                    ft.setBold(c.bold)
+                    ft.setUnderline(c.underline)
+                    qp.setFont(ft)
+
+                    if c.placeholder == Placeholder.NON:
+                        if not c.reverse or in_selection:
                             qp.fillRect(cn*cw, int(ht - 0.8*ch),
                                         cw*c.char_width, lh, bgcolor)
-                            qp.setPen(c.color if not c.reverse else c.bg_color)
-                            qp.drawText(cn*cw, ht, c.char)
-                            # End of character rendering
-            else:
-                # Process non-selected lines
-                for cn, c in enumerate(row):
-                    if c:
-                        bgcolor = c.bg_color
+                            qp.setPen(c.color)
+                        else:
+                            qp.fillRect(cn*cw, int(ht - 0.8*ch),
+                                        cw*c.char_width, lh, c.color)
+                            qp.setPen(c.bg_color)
 
-                        # Start of character rendering
-                        ft.setBold(c.bold)
-                        ft.setUnderline(c.underline)
-                        qp.setFont(ft)
-                        qp.fillRect(cn*cw, int(ht - 0.8*ch),
-                                    cw*c.char_width, lh, bgcolor)
-                        qp.setPen(c.color if not c.reverse else c.bg_color)
                         qp.drawText(cn*cw, ht, c.char)
-                        # End of character rendering
 
         qp.end()
         self._painter_lock.unlock()
@@ -567,6 +561,7 @@ class Terminal(TerminalBuffer, QWidget):
         key = event.key()
         modifiers = event.modifiers()
         text = event.text()
+        self.reset_selection()
 
         while True:
             # This is a one-shot loop, because I want to use 'break'
