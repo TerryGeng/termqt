@@ -10,7 +10,7 @@ from Qt.QtCore import Qt, QTimer, QMutex, Signal
 from .terminal_buffer import Position, TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar, Placeholder
 
-SELECTION_BG_COLOR = Qt.cyan
+from .colors import colors16
 
 
 class CursorState(Enum):
@@ -86,7 +86,7 @@ class Terminal(TerminalBuffer, QWidget):
 
         self.set_bg(DEFAULT_BG_COLOR)
         self.set_fg(DEFAULT_FG_COLOR)
-        self.selection_color = SELECTION_BG_COLOR
+        self.selection_color = colors16[30]
         self.metrics = None
         self.set_font(font)
         self.setAutoFillBackground(True)
