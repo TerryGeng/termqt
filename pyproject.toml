@@ -1,6 +1,6 @@
 [project]
 name = "termqt"
-version = "0.11.0"
+version = "1.0.0"
 authors = [
   { name="Terry Geng", email="terry@terriex.com" },
 ]
