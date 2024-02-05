@@ -1183,7 +1183,7 @@ class TerminalBuffer:
 
         self._buffer_display_offset = min(self._buffer_display_offset - lines, 0)
 
-        for y in range(min(cur_pos.y - lines + 1, 0), cur_pos.y + 1):
+        for y in reversed(range(min(cur_pos.y - lines + 1, 0), cur_pos.y + 1)):
             del buf[y]
 
         if self._buffer_display_offset > len(self._buffer):
