@@ -91,6 +91,7 @@ class EscapeProcessor:
         WAIT_FOR_BRAC_OR_CHAR = 1
         # if receive a [, transfer to CSI_WAIT_FOR_MARKS
         # if receive a ], transfer to OSC_WAIT_FOR_NEXT_ARG
+        # if receive a (, transfer to OSC_WAIT_FOR_ARG
         # if receive a letter/digit, save to cmd buffer, transfer to ESC_COMPLETE
         # otherwise return to WAIT_FOR_ESC
 
@@ -128,6 +129,13 @@ class EscapeProcessor:
         # otherwise return to WAIT_FOR_ESC
 
         OSC_COMPLETE = 9
+        # once entered, process the input and return to WAIT_FOR_ESC
+
+        G0_WAIT_FOR_ARG = 10
+        # if receive a letter/number, save to cmd buffer, transfer to G0_COMPLETE
+
+        G0_COMPLETE = 11
+        # once entered, process the input and return to WAIT_FOR_ESC
 
     def __init__(self, logger):
         self.logger = logger
@@ -143,6 +151,7 @@ class EscapeProcessor:
         }
 
         self._csi_func = {
+            'd': self._csi_d,
             'n': self._csi_n,
             'n?': self._csi_n,
             'm': self._csi_m,
@@ -192,6 +201,11 @@ class EscapeProcessor:
         #  pos_r: row (begin from 0)
         #  pos_c: column
         self.set_cursor_abs_position_cb = lambda pos_r, pos_c: None
+
+        # Cursor Vertical Position Absolute (VPA)
+        #   Move cursor to row `pos_r` (begin from 0).
+        self.set_cursor_y_position_cb = lambda pos_r: None
+
 
         # Cursor Position(relative position)
         #  set the position of the cursor
@@ -273,6 +287,8 @@ class EscapeProcessor:
                 self._enter_state(self.State.CSI_WAIT_FOR_MARKS)
             elif c == 93:  # ord(']')
                 self._enter_state(self.State.OSC_WAIT_FOR_NEXT_ARG)
+            elif c == 40:  # ord('(')
+                self._enter_state(self.State.G0_WAIT_FOR_ARG)
             elif 48 <= c <= 57 or \
                     65 <= c <= 90 or 97 <= c <= 122:  # 0-9, A-Z, a-z
                 self._cmd = chr(c)
@@ -354,6 +370,16 @@ class EscapeProcessor:
             # this branch should never be reached
             self.fail()
 
+        # === G0 ===
+        elif self._state == self.State.G0_WAIT_FOR_ARG:
+            self._args.append(chr(c))
+            self._enter_state(self.State.G0_COMPLETE)
+            return 1
+
+        elif self._state == self.State.G0_COMPLETE:
+            # this branch should never be reached
+            self.fail()
+
         else:
             raise ValueError(f"Unhandle state {self._state}")
 
@@ -371,6 +397,10 @@ class EscapeProcessor:
         elif _state == self.State.OSC_COMPLETE:
             self._state = self.State.OSC_COMPLETE
             self._process_osc_command()
+            self.reset()
+        elif _state == self.State.G0_COMPLETE:
+            self._state = self.State.G0_COMPLETE
+            pass # Not implemented
             self.reset()
         else:
             self._state = _state
@@ -435,6 +465,9 @@ class EscapeProcessor:
 
         self.reverse_index_cb()
 
+    def _csi_d(self):
+        self.set_cursor_y_position_cb(self._get_args(0, default=1) - 1)
+
     def _csi_n(self):
         # DSR – Device Status Report
         arg = self._get_args(0, default=0)
@@ -492,6 +525,12 @@ class EscapeProcessor:
         bold, underline, reverse = -1, -1, -1
 
         i = 0
+
+        if len(self._args) == 0:
+            bold, underline, reverse = 0, 0, 0
+            color = DEFAULT_FG_COLOR
+            bg_color = DEFAULT_BG_COLOR
+
         while i < len(self._args):
             arg = self._get_args(i, default=0)
             if 0 <= arg <= 29:
@@ -759,6 +798,7 @@ class TerminalBuffer:
         ep.erase_line_cb = self.erase_line
         ep.delete_line_cb = self.delete_line
         ep.reverse_index_cb = lambda: self.set_cursor_rel_pos(0, -1, False)
+        ep.set_cursor_y_position_cb = self.set_cursor_y_pos
         ep.set_cursor_abs_position_cb = self.set_cursor_on_screen_position
         ep.set_cursor_rel_position_cb = self.set_cursor_rel_pos
         ep.set_cursor_x_position_cb = self.set_cursor_x_pos
@@ -1183,7 +1223,7 @@ class TerminalBuffer:
 
         self._buffer_display_offset = min(self._buffer_display_offset - lines, 0)
 
-        for y in range(min(cur_pos.y - lines + 1, 0), cur_pos.y + 1):
+        for y in reversed(range(min(cur_pos.y - lines + 1, 0), cur_pos.y + 1)):
             del buf[y]
 
         if self._buffer_display_offset > len(self._buffer):
@@ -1323,6 +1363,11 @@ class TerminalBuffer:
         y = self._cursor_position.y
 
         self.set_cursor_position(x, y)
+
+    def set_cursor_y_pos(self,  y):
+        pos_y = self._buffer_display_offset + y
+
+        self.set_cursor_position(self._cursor_position.x, pos_y)
 
     def report_cursor_pos(self):
         x = self._cursor_position.x + 1

@@ -413,7 +413,7 @@ class Terminal(TerminalBuffer, QWidget):
             pass
         else:
             chr_x = ind_x
-            c = self._buffer[ind_y][chr_x]
+            c = self._buffer[ind_y][chr_x] if ind_y < len(self._buffer) else None
 
             if not c:
                 qp.drawText(x, cy, " ")
