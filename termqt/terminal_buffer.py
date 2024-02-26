@@ -165,6 +165,7 @@ class EscapeProcessor:
             'J': self._csi_J,
             'K': self._csi_K,
             'M': self._csi_M,
+            '@': self._csi_AT,
             'h?': partial(self._csi_h_l_ext, True),
             'l?': partial(self._csi_h_l_ext, False)
         }
@@ -261,6 +262,14 @@ class EscapeProcessor:
         #  on: bool, enable/disable
         self.enable_auto_wrap = lambda on: None
 
+        # Insert Space
+        # https://terminalguide.namepad.de/seq/csi_x40_at/
+        # Inserts amount spaces at current cursor position moving existing
+        # cell contents to the right. The contents of the amount right-most
+        # columns in the scroll region are lost. The cursor position is not changed.
+        #  num: int, the amount of spaces
+        self.insert_space_cb = lambda num: None
+
         # Auto-wrap
         #  on: bool, on/off
 
@@ -289,8 +298,7 @@ class EscapeProcessor:
                 self._enter_state(self.State.OSC_WAIT_FOR_NEXT_ARG)
             elif c == 40:  # ord('(')
                 self._enter_state(self.State.G0_WAIT_FOR_ARG)
-            elif 48 <= c <= 57 or \
-                    65 <= c <= 90 or 97 <= c <= 122:  # 0-9, A-Z, a-z
+            elif 33 <= c <= 126:  # anything else
                 self._cmd = chr(c)
                 self._enter_state(self.State.ESC_COMPLETE)
                 return 1
@@ -304,7 +312,8 @@ class EscapeProcessor:
             elif 48 <= c <= 57:  # digits, 0-9
                 self._arg_buf += chr(c)
                 self._enter_state(self.State.CSI_WAIT_FOR_ARG_FINISH)
-            elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
+            elif 33 <= c <= 47 or 59 <= c <= 90 or 92 <= c <= 126:
+                # letters, A-Z, a-z and symbols, exclude [
                 self._cmd = chr(c)
                 self._enter_state(self.State.CSI_COMPLETE)
                 return 1
@@ -315,7 +324,8 @@ class EscapeProcessor:
             if 48 <= c <= 57:  # digits, 0-9
                 self._arg_buf += chr(c)
                 self._enter_state(self.State.CSI_WAIT_FOR_ARG_FINISH)
-            elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
+            elif 33 <= c <= 47 or 59 <= c <= 90 or 92 <= c <= 126:
+                # letters, A-Z, a-z and symbols, exclude [
                 self._cmd = chr(c)
                 self._enter_state(self.State.CSI_COMPLETE)
                 return 1
@@ -329,7 +339,8 @@ class EscapeProcessor:
                 self._args.append(int(self._arg_buf))
                 self._arg_buf = ""
                 self._enter_state(self.State.CSI_WAIT_FOR_NEXT_ARG)
-            elif 65 <= c <= 90 or 97 <= c <= 122:  # letters, A-Z, a-z
+            elif 33 <= c <= 47 or 59 <= c <= 90 or 92 <= c <= 126:
+                # letters, A-Z, a-z and symbols, exclude [
                 self._args.append(int(self._arg_buf))
                 self._cmd = chr(c)
                 self._enter_state(self.State.CSI_COMPLETE)
@@ -517,6 +528,10 @@ class EscapeProcessor:
         # Cursor Horizontal Absolute
         index_in_line = self._get_args(0, default=0) - 1
         self.set_cursor_x_position_cb(index_in_line)
+
+    def _csi_AT(self):
+        # ICH - Insert Space
+        self.insert_space_cb(self._get_args(0, default=1))
 
     def _csi_m(self):
         # Colors and decorators
@@ -809,6 +824,7 @@ class TerminalBuffer:
         ep.use_alt_buffer = self.toggle_alt_screen
         ep.save_cursor_use_alt_buffer = self.toggle_alt_screen_save_cursor
         ep.enable_auto_wrap = self.enable_auto_wrap
+        ep.insert_space_cb = self.insert_space
 
     def set_bg(self, color: QColor):
         self._bg_color = color
@@ -1277,6 +1293,29 @@ class TerminalBuffer:
 
     def enable_auto_wrap(self, on=True):
         self.auto_wrap_enabled = on
+
+    def insert_space(self, num):
+        self._buffer_lock.lock()
+
+        cur_x = self._cursor_position.x
+        cur_y = self._cursor_position.y
+
+        space_left = self.row_len - cur_x
+
+        if num >= space_left:
+            self._buffer[cur_y][cur_x:] = [None] * space_left
+            return
+
+        to_move = self._buffer[cur_y][cur_x+num]
+        # the first character to move
+
+        if to_move and to_move.placeholder == Placeholder.TAIL:
+            self._buffer[cur_y][cur_x-num-1] = None
+
+        self._buffer[cur_y][cur_x+num:self.row_len] = self._buffer[cur_y][cur_x:self.row_len-num]
+        self._buffer[cur_y][cur_x:cur_x+num] = [None]*num
+
+        self._buffer_lock.unlock()
 
     # ==========================
     #       CURSOR CONTROL
