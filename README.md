@@ -13,7 +13,7 @@ people, it can run IPython and perhaps more complicated applications.
 ## Dependencies
 
 - Python 3.5+ (to get PyQt5 running),
-- PyQt5 / PySide2.
+- PyQt5 /PyQt6 / PySide2 / PySide6.
 
 ## Installation
 

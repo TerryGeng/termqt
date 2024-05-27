@@ -8,7 +8,7 @@ description = "A terminal emulator widget implemented in Python/Qt."
 readme = "README.md"
 requires-python = ">=3.7"
 dependencies = [
-    "Qt.py >= 1.3.0",
+    "qtpy",
     "pywinpty >= 2.0.1; platform_system=='Windows'"
 ]
 classifiers = [

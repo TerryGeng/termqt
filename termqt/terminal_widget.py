@@ -2,14 +2,14 @@ import logging
 import math
 from enum import Enum
 
-from Qt.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication
-from Qt.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
+from qtpy.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication
+from qtpy.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
                       QPen, QFont, QFontInfo, QFontMetrics, QPixmap)
-from Qt.QtCore import Qt, QTimer, QMutex, Signal
+from qtpy.QtCore import Qt, QTimer, QMutex, Signal
 
 from .terminal_buffer import Position, TerminalBuffer, DEFAULT_BG_COLOR, \
     DEFAULT_FG_COLOR, ControlChar, Placeholder
-
+from qtpy import QT_VERSION
 from .colors import colors16
 
 
@@ -67,7 +67,7 @@ class Terminal(TerminalBuffer, QWidget):
         # we paint everything to the pixmap first then paint this pixmap
         # on paint event. This allows us to partially update the canvas.
         self._canvas = QPixmap(width, height)
-        self._painter_lock = QMutex(QMutex.Recursive)
+        self._painter_lock = QMutex()
 
         self._width = width
         self._height = height
@@ -203,17 +203,22 @@ class Terminal(TerminalBuffer, QWidget):
         TerminalBuffer.set_bg(self, color)
 
         pal = self.palette()
-        pal.setColor(QPalette.Background, color)
+        pal.setColor(QPalette.Window, color)
         self.setPalette(pal)
 
     def set_fg(self, color: QColor):
         TerminalBuffer.set_fg(self, color)
 
         pal = self.palette()
-        pal.setColor(QPalette.Foreground, color)
+        pal.setColor(QPalette.WindowText, color)
         self.setPalette(pal)
 
     def set_font(self, font: QFont = None):
+
+        if QT_VERSION.startswith("6"):
+            self.set_font_qt6(font)
+            return
+
         qfd = QFontDatabase()
 
         if font:
@@ -244,7 +249,36 @@ class Terminal(TerminalBuffer, QWidget):
 
         self.row_len = int(self._width / self.char_width)
         self.col_len = int(self._height / self.line_height)
+    def set_font_qt6(self, font: QFont = None):
 
+        if font:
+            info = QFontInfo(font)
+            if info.styleHint() != QFont.StyleHint.Monospace:
+                self.logger.warning("font: Please use monospaced font! "
+                                    f"Unsupported font {info.family()}.")
+                font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        elif "Menlo" in QFontDatabase.families():
+            font = QFont("Menlo")
+            info = QFontInfo(font)
+        elif "Consolas" in QFontDatabase.families():
+            font = QFont("Consolas")
+            info = QFontInfo(font)
+        else:
+            font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+            info = QFontInfo(font)
+
+        font.setPointSize(self.font_size)
+        self.font = font
+        self.metrics = QFontMetrics(font)
+        self.char_width = self.metrics.horizontalAdvance("A")
+        self.char_height = self.metrics.height()
+        self.line_height = int(self.char_height * self._line_height_factor)
+
+        self.logger.info(f"font: Font {info.family()} selected, character "
+                         f"size {self.char_width}x{self.char_height}.")
+
+        self.row_len = int(self._width / self.char_width)
+        self.col_len = int(self._height / self.line_height)
     def resizeEvent(self, event):
         self.resize(event.size().width(), event.size().height())
 
