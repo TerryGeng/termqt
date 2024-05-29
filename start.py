@@ -2,7 +2,8 @@ import sys
 import logging
 import platform
 from qtpy.QtWidgets import QApplication, QWidget, QHBoxLayout, QScrollBar
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QCoreApplication
+from qtpy import QT_VERSION
 from qtpy.QtGui import QFont
 
 import termqt
@@ -19,6 +20,8 @@ if __name__ == "__main__":
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
+    if QT_VERSION.startswith("5"):
+        QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     app = QApplication([])
     window = QWidget()
     window.setWindowTitle("termqt on {}".format(platform.system()))
