@@ -214,29 +214,40 @@ class Terminal(TerminalBuffer, QWidget):
         self.setPalette(pal)
 
     def set_font(self, font: QFont = None):
-
         if QT_VERSION.startswith("6"):
-            self.set_font_qt6(font)
-            return
+            self._set_font_qt6(font)
+        else:
+            self._set_font_qt5(font)
 
+    def _set_font_qt5(self, font: QFont):
         qfd = QFontDatabase()
+        font, info = self._select_font(qfd, font)
+        self._apply_font_settings(font, info)
 
+    def _set_font_qt6(self, font: QFont):
+        font, info = self._select_font(None, font)
+        self._apply_font_settings(font, info)
+
+    def _select_font(self, qfd: QFontDatabase, font: QFont):
         if font:
             info = QFontInfo(font)
             if info.styleHint() != QFont.Monospace:
-                self.logger.warning("font: Please use monospaced font! "
-                                    f"Unsupported font {info.family()}.")
-                font = qfd.systemFont(QFontDatabase.FixedFont)
-        elif "Menlo" in qfd.families():
+                self.logger.warning("font: Please use monospaced font! Unsupported font {info.family()}.")
+                font = qfd.systemFont(QFontDatabase.FixedFont) if qfd else QFontDatabase.systemFont(
+                    QFontDatabase.SystemFont.FixedFont)
+        elif qfd and "Menlo" in qfd.families():
             font = QFont("Menlo")
             info = QFontInfo(font)
-        elif "Consolas" in qfd.families():
+        elif qfd and "Consolas" in qfd.families():
             font = QFont("Consolas")
             info = QFontInfo(font)
         else:
-            font = qfd.systemFont(QFontDatabase.FixedFont)
+            font = qfd.systemFont(QFontDatabase.FixedFont) if qfd else QFontDatabase.systemFont(
+                QFontDatabase.SystemFont.FixedFont)
             info = QFontInfo(font)
+        return font, info
 
+    def _apply_font_settings(self, font: QFont, info: QFontInfo):
         font.setPointSize(self.font_size)
         self.font = font
         self.metrics = QFontMetrics(font)
@@ -244,38 +255,7 @@ class Terminal(TerminalBuffer, QWidget):
         self.char_height = self.metrics.height()
         self.line_height = int(self.char_height * self._line_height_factor)
 
-        self.logger.info(f"font: Font {info.family()} selected, character "
-                         f"size {self.char_width}x{self.char_height}.")
-
-        self.row_len = int(self._width / self.char_width)
-        self.col_len = int(self._height / self.line_height)
-    def set_font_qt6(self, font: QFont = None):
-
-        if font:
-            info = QFontInfo(font)
-            if info.styleHint() != QFont.StyleHint.Monospace:
-                self.logger.warning("font: Please use monospaced font! "
-                                    f"Unsupported font {info.family()}.")
-                font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        elif "Menlo" in QFontDatabase.families():
-            font = QFont("Menlo")
-            info = QFontInfo(font)
-        elif "Consolas" in QFontDatabase.families():
-            font = QFont("Consolas")
-            info = QFontInfo(font)
-        else:
-            font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-            info = QFontInfo(font)
-
-        font.setPointSize(self.font_size)
-        self.font = font
-        self.metrics = QFontMetrics(font)
-        self.char_width = self.metrics.horizontalAdvance("A")
-        self.char_height = self.metrics.height()
-        self.line_height = int(self.char_height * self._line_height_factor)
-
-        self.logger.info(f"font: Font {info.family()} selected, character "
-                         f"size {self.char_width}x{self.char_height}.")
+        self.logger.info(f"font: Font {info.family()} selected, character size {self.char_width}x{self.char_height}.")
 
         self.row_len = int(self._width / self.char_width)
         self.col_len = int(self._height / self.line_height)
