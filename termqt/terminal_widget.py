@@ -214,36 +214,26 @@ class Terminal(TerminalBuffer, QWidget):
         self.setPalette(pal)
 
     def set_font(self, font: QFont = None):
-        if QT_VERSION.startswith("6"):
-            self._set_font_qt6(font)
-        else:
-            self._set_font_qt5(font)
-
-    def _set_font_qt5(self, font: QFont):
-        qfd = QFontDatabase()
-        font, info = self._select_font(qfd, font)
+        is_qt6 = QT_VERSION.startswith("6")
+        qfd = QFontDatabase if is_qt6 else QFontDatabase()
+        fix_font_flag = QFontDatabase.SystemFont.FixedFont if is_qt6 else QFontDatabase.FixedFont
+        font, info = self._select_font(qfd, font, fix_font_flag)
         self._apply_font_settings(font, info)
 
-    def _set_font_qt6(self, font: QFont):
-        font, info = self._select_font(None, font)
-        self._apply_font_settings(font, info)
-
-    def _select_font(self, qfd: QFontDatabase, font: QFont):
+    def _select_font(self, qfd, font: QFont, fix_font_flag):
         if font:
             info = QFontInfo(font)
             if info.styleHint() != QFont.Monospace:
-                self.logger.warning("font: Please use monospaced font! Unsupported font {info.family()}.")
-                font = qfd.systemFont(QFontDatabase.FixedFont) if qfd else QFontDatabase.systemFont(
-                    QFontDatabase.SystemFont.FixedFont)
-        elif qfd and "Menlo" in qfd.families():
+                self.logger.warning(f"font: Please use a monospaced font! Unsupported font {info.family()}.")
+                font = qfd.systemFont(fix_font_flag) if qfd else QFontDatabase.systemFont(fix_font_flag)
+        elif not qfd or "Menlo" in qfd.families():
             font = QFont("Menlo")
             info = QFontInfo(font)
-        elif qfd and "Consolas" in qfd.families():
+        elif not qfd or "Consolas" in qfd.families():
             font = QFont("Consolas")
             info = QFontInfo(font)
         else:
-            font = qfd.systemFont(QFontDatabase.FixedFont) if qfd else QFontDatabase.systemFont(
-                QFontDatabase.SystemFont.FixedFont)
+            font = qfd.systemFont(fix_font_flag) if qfd else QFontDatabase.systemFont(fix_font_flag)
             info = QFontInfo(font)
         return font, info
 
