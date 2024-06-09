@@ -1,9 +1,10 @@
 import sys
 import logging
 import platform
-from PyQt5.QtWidgets import QApplication, QWidget, QHBoxLayout, QScrollBar
-from PyQt5.QtCore import Qt, QCoreApplication
-from PyQt5.QtGui import QFont
+from qtpy.QtWidgets import QApplication, QWidget, QHBoxLayout, QScrollBar
+from qtpy.QtCore import Qt, QCoreApplication
+from qtpy import QT_VERSION
+from qtpy.QtGui import QFont
 
 import termqt
 from termqt import Terminal
@@ -19,7 +20,8 @@ if __name__ == "__main__":
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    if QT_VERSION.startswith("5"):
+        QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     app = QApplication([])
     window = QWidget()
     window.setWindowTitle("termqt on {}".format(platform.system()))

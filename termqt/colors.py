@@ -1,4 +1,4 @@
-from Qt.QtGui import QColor
+from qtpy.QtGui import QColor
 
 # This file stores all xterm-256 colors.
 # See https://jonasjacek.github.io/colors/
