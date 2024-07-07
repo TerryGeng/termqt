@@ -571,13 +571,17 @@ class Terminal(TerminalBuffer, QWidget):
             # This is a one-shot loop, because I want to use 'break'
             # to jump out of this block
             if key == Qt.Key_Up:
-                self.input(b'\x1b[A')
+                #self.input(b'\x1b[A')
+                self.input(b'\x1bOA')
             elif key == Qt.Key_Down:
-                self.input(b'\x1b[B')
+                #self.input(b'\x1b[B')
+                self.input(b'\x1bOB')
             elif key == Qt.Key_Right:
-                self.input(b'\x1b[C')
+                #self.input(b'\x1b[C')
+                self.input(b'\x1bOC')
             elif key == Qt.Key_Left:
-                self.input(b'\x1b[D')
+                #self.input(b'\x1b[D')
+                self.input(b'\x1bOD')
             else:
                 break  # avoid the execution of 'return'
             return
@@ -592,6 +596,30 @@ class Terminal(TerminalBuffer, QWidget):
                     self.input(ControlChar.BS.value)
                 elif key == Qt.Key_Escape:
                     self.input(ControlChar.ESC.value)
+                elif key == Qt.Key_F1:
+                    self.input(b'\x1b[11~')
+                elif key == Qt.Key_F2:
+                    self.input(b'\x1b[12~')
+                elif key == Qt.Key_F3:
+                    self.input(b'\x1b[13~')
+                elif key == Qt.Key_F4:
+                    self.input(b'\x1b[14~')
+                elif key == Qt.Key_F5:
+                    self.input(b'\x1b[15~')
+                elif key == Qt.Key_F6:
+                    self.input(b'\x1b[17~')
+                elif key == Qt.Key_F7:
+                    self.input(b'\x1b[18~')
+                elif key == Qt.Key_F8:
+                    self.input(b'\x1b[19~')
+                elif key == Qt.Key_F9:
+                    self.input(b'\x1b[20~')
+                elif key == Qt.Key_F10:
+                    self.input(b'\x1b[21~')
+                elif key == Qt.Key_F11:
+                    self.input(b'\x1b[23~')
+                elif key == Qt.Key_F12:
+                    self.input(b'\x1b[24~')
                 else:
                     break  # avoid the execution of 'return'
                 return
