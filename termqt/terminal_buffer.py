@@ -652,7 +652,7 @@ class TerminalBuffer:
 
         # initialize a buffer to store all characters to display
         # define in _resize()_ as a deque
-        self._buffer = None
+        self._buffer:deque[list[None]] = None
         if QT_VERSION.startswith('6'):
             self._buffer_lock =QRecursiveMutex()
         else:
@@ -1018,8 +1018,13 @@ class TerminalBuffer:
 
         self.row_len = row_len
         self.col_len = col_len
-        self._buffer = _new_buffer
         self._buffer_display_offset = len(self._buffer) - self.col_len
+
+        for i in range(abs(self._buffer_display_offset)):
+            _new_buffer.append([None for x in range(row_len)])
+            _new_wrap.append(False)
+        
+        self._buffer = _new_buffer
         self.update_scroll_position()
 
         self._line_wrapped_flags = _new_wrap
