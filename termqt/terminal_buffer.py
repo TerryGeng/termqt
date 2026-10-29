@@ -641,6 +641,22 @@ class EscapeProcessor:
 
 
 class TerminalBuffer:
+    # Deferred wrap (VT100 "last column flag").  A write that fills the last
+    # column does not move the cursor to the next row: the cursor stays on the
+    # last column and a wrap is *owed*; the next printable character pays it
+    # (write() starts that character at row_len, so its wrap logic fires).
+    # Anything that moves the cursor cancels the debt -- the setter below.
+    _wrap_pending = False
+
+    @property
+    def _cursor_position(self):
+        return self._cursor_pos
+
+    @_cursor_position.setter
+    def _cursor_position(self, pos):
+        self._cursor_pos = pos
+        self._wrap_pending = False
+
     def __init__(self,
                  row_len,
                  col_len,
@@ -1044,7 +1060,9 @@ class TerminalBuffer:
 
         if not pos:
             pos = self._cursor_position
-            pos_x = pos.x
+            # an owed wrap: start at the right edge, the first printable
+            # character does not fit there and wraps (a '\n' just moves down)
+            pos_x = row_len if self._wrap_pending else pos.x
             pos_y = pos.y
         else:
             pos_x = pos.x
@@ -1098,6 +1116,9 @@ class TerminalBuffer:
         if set_cursor:
             # assert pos_x <= row_len
             self._cursor_position = Position(min(pos_x, row_len-1), pos_y)
+            # the row is full: the cursor waits on the last column, a wrap is owed
+            # (set after the position: assigning the position clears the flag)
+            self._wrap_pending = pos_x == row_len
 
         if reset_offset:
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,
