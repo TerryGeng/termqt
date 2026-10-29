@@ -2,7 +2,7 @@ import logging
 import math
 from enum import Enum
 
-from qtpy.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication
+from qtpy.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication, QMessageBox
 from qtpy.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
                       QPen, QFont, QFontInfo, QFontMetrics, QPixmap,
                       QClipboard)
@@ -43,6 +43,9 @@ class Terminal(TerminalBuffer, QWidget):
 
     # update scroll bar
     update_scroll_sig = Signal()
+
+    # ask before pasting text that contains a line break (see _paste)
+    confirm_multiline_paste = True
 
     def __init__(self,
                  width,
@@ -176,9 +179,36 @@ class Terminal(TerminalBuffer, QWidget):
 
     def _paste(self, mode):
         text = QApplication.clipboard().text(mode)
-        if text:
-            # a pasted line break is what Enter sends: a carriage return
-            self.input(text.replace('\r\n', '\n').replace('\n', '\r').encode('utf-8'))
+        if not text:
+            return
+        text = text.replace('\r\n', '\n')
+        # The shell cannot tell a paste from typing (no bracketed paste), so every line break runs the
+        # line before it.  Ask first when there is one.
+        if '\n' in text and self.confirm_multiline_paste and not self._confirm_paste(text):
+            return
+        # a pasted line break is what Enter sends: a carriage return
+        self.input(text.replace('\n', '\r').encode('utf-8'))
+
+    def _confirm_paste(self, text):
+        """Ask whether to paste text that contains line breaks; True = go ahead.  (Its own method: tests replace it.)"""
+        lines = text.split('\n')
+        if lines[-1] == '':
+            lines.pop()                         # the line break that ends the last line is not another line
+        shown = lines[:5]
+        preview = '\n'.join(l if len(l) <= 70 else l[:67] + '...' for l in shown)
+        if len(lines) > len(shown):
+            preview += '\n... (%d more)' % (len(lines) - len(shown))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Paste")
+        box.setText("Paste %d line%s?  Each line runs as soon as it is pasted." %
+                    (len(lines), '' if len(lines) == 1 else 's'))
+        box.setInformativeText(preview)
+        paste = box.addButton("Paste", QMessageBox.AcceptRole)
+        cancel = box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(cancel)            # a stray Enter must not paste
+        box.exec_()
+        return box.clickedButton() is paste
 
     def _copy_selection_to_primary(self):
         # X11: selecting text puts it in the PRIMARY selection (pasted with the
