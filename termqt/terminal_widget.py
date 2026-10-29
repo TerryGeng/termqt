@@ -531,7 +531,11 @@ class Terminal(TerminalBuffer, QWidget):
         self._switch_cursor_blink(CursorState.ON, False)
 
     def _restore_cursor_state(self):
-        self._cursor_blinking_state = self._saved_cursor_state
+        # The state saved earlier can be stale (the focus may have changed since,
+        # and a saved "unfocused" overrode the focus-in).  The right state is
+        # whether the terminal has focus now.
+        self._cursor_blinking_state = (CursorState.ON if self.hasFocus()
+                                       else CursorState.UNFOCUSED)
         self._switch_cursor_blink(self._cursor_blinking_state, True)
 
     def stdout(self, string: bytes):
