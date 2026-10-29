@@ -804,7 +804,10 @@ class TerminalBuffer:
                             line_text += line[col].char if line[col] else ' '
                         elif start.y < row < end.y:
                             line_text += line[col].char if line[col] else ' '
-                    selected_text += line_text.rstrip() + '\n'
+                    if row < end.y and self._line_wrapped_flags[row]:
+                        selected_text += line_text      # soft-wrapped: the line goes on in the next row
+                    else:
+                        selected_text += line_text.rstrip() + '\n'
             return selected_text.strip('\n')
         return ""
 
@@ -817,9 +820,16 @@ class TerminalBuffer:
 
     def _get_all_text_rstrip(self):
         all_text = []
-        for row in self._buffer:
-            line_text = ''.join(c.char if c else ' ' for c in row).rstrip()
-            all_text.append(line_text)
+        joined = ''
+        for y, row in enumerate(self._buffer):
+            line_text = ''.join(c.char if c else ' ' for c in row)
+            if self._line_wrapped_flags[y]:
+                joined += line_text         # soft-wrapped: the line goes on in the next row
+            else:
+                all_text.append((joined + line_text).rstrip())
+                joined = ''
+        if joined:
+            all_text.append(joined.rstrip())
 
         # Remove empty lines at the end of the buffer
         while all_text and not all_text[-1]:
