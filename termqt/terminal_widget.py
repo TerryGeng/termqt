@@ -166,6 +166,18 @@ class Terminal(TerminalBuffer, QWidget):
             self._show_context_menu(event.pos())
         elif event.button() == Qt.LeftButton:
             self._copy_selection_to_primary()
+        elif event.button() == Qt.MiddleButton:
+            self._paste_primary()
+
+    def _paste_primary(self):
+        # X11: the middle button pastes the PRIMARY selection (what was last selected)
+        clipboard = QApplication.clipboard()
+        if not clipboard.supportsSelection():
+            return
+        text = clipboard.text(QClipboard.Selection)
+        if text:
+            # a pasted line break is what Enter sends: a carriage return
+            self.input(text.replace('\r\n', '\n').replace('\n', '\r').encode('utf-8'))
 
     def _copy_selection_to_primary(self):
         # X11: selecting text puts it in the PRIMARY selection (pasted with the
