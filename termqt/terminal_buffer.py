@@ -917,6 +917,10 @@ class TerminalBuffer:
 
         if old_row_len == row_len:
             self.col_len = col_len
+            # the screen got taller: the buffer must have a row for every screen row
+            while len(self._buffer) < col_len:
+                self._buffer.append([None for x in range(row_len)])
+                self._line_wrapped_flags.append(False)
             self._buffer_display_offset = max(len(self._buffer) - self.col_len, 0)
             self.update_scroll_position()
 
@@ -1051,6 +1055,11 @@ class TerminalBuffer:
         for i in range(filler):
             _new_buffer.appendleft([None for x in range(row_len)])
             _new_wrap.appendleft(False)
+
+        # the screen got taller: a row in the buffer for every screen row
+        while len(_new_buffer) < col_len:
+            _new_buffer.append([None for x in range(row_len)])
+            _new_wrap.append(False)
 
         while len(self._buffer) > self.maximum_line_history:
             _new_buffer.popleft()
