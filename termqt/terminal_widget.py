@@ -4,7 +4,8 @@ from enum import Enum
 
 from qtpy.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication
 from qtpy.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
-                      QPen, QFont, QFontInfo, QFontMetrics, QPixmap)
+                      QPen, QFont, QFontInfo, QFontMetrics, QPixmap,
+                      QClipboard)
 from qtpy.QtCore import Qt, QTimer, QMutex, Signal
 
 from .terminal_buffer import Position, TerminalBuffer, DEFAULT_BG_COLOR, \
@@ -163,6 +164,20 @@ class Terminal(TerminalBuffer, QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.RightButton:
             self._show_context_menu(event.pos())
+        elif event.button() == Qt.LeftButton:
+            self._copy_selection_to_primary()
+
+    def _copy_selection_to_primary(self):
+        # X11: selecting text puts it in the PRIMARY selection (pasted with the
+        # middle button), no copy step.  Not every platform has one.
+        clipboard = QApplication.clipboard()
+        if not clipboard.supportsSelection():
+            return
+        if self._selection_start is None or self._selection_end is None:
+            return                      # just a click, nothing was selected
+        text = self._get_selected_text_rstrip()
+        if text:
+            clipboard.setText(text, QClipboard.Selection)
 
     def _show_context_menu(self, position):
         menu = QMenu(self)
