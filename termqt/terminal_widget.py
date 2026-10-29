@@ -171,10 +171,11 @@ class Terminal(TerminalBuffer, QWidget):
 
     def _paste_primary(self):
         # X11: the middle button pastes the PRIMARY selection (what was last selected)
-        clipboard = QApplication.clipboard()
-        if not clipboard.supportsSelection():
-            return
-        text = clipboard.text(QClipboard.Selection)
+        if QApplication.clipboard().supportsSelection():
+            self._paste(QClipboard.Selection)
+
+    def _paste(self, mode):
+        text = QApplication.clipboard().text(mode)
         if text:
             # a pasted line break is what Enter sends: a carriage return
             self.input(text.replace('\r\n', '\n').replace('\n', '\r').encode('utf-8'))
@@ -602,6 +603,25 @@ class Terminal(TerminalBuffer, QWidget):
         key = event.key()
         modifiers = event.modifiers()
         text = event.text()
+
+        # Pressing a modifier alone sends nothing to the shell, and must not clear the
+        # selection: the Ctrl and Shift of Ctrl+Shift+C arrive as key presses of their own.
+        if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta, Qt.Key_AltGr):
+            return
+
+        # Ctrl+Shift+C / Ctrl+Shift+V: copy / paste.  Plain Ctrl+C and Ctrl+V belong to the shell
+        # (interrupt, quote-next-character), so a terminal can't use them.  Before reset_selection:
+        # a key press clears the selection, and there would be nothing left to copy.
+        if modifiers == (Qt.ControlModifier | Qt.ShiftModifier):
+            if key == Qt.Key_C:
+                selected = self._get_selected_text_rstrip()
+                if selected:
+                    QApplication.clipboard().setText(selected)
+                return
+            if key == Qt.Key_V:
+                self._paste(QClipboard.Clipboard)
+                return
+
         self.reset_selection()
 
         while True:
