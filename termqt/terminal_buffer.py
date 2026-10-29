@@ -930,18 +930,18 @@ class TerminalBuffer:
 
         # Where the cursor is within its logical line (a chain of rows joined by
         # soft wraps), so it can be found again once the rows are re-split:
-        # its character offset from the line's first row, and how many logical
-        # lines lie below it (counted from the bottom: rows above may be
-        # re-split or trimmed, the count below stays true).
-        cur_offset = lines_below = None
+        # its character offset from the line's first row, and its index among
+        # the logical lines (counted from the top: blank rows below the cursor,
+        # or rows added below it later, must not move it).
+        cur_offset = line_index = None
         if cur_y < len(self._line_wrapped_flags):
             wrapped = self._line_wrapped_flags
             line_start = cur_y
             while line_start > 0 and wrapped[line_start - 1]:
                 line_start -= 1
             cur_offset = (cur_y - line_start) * old_row_len + cur_x
-            lines_below = sum(1 for r in range(cur_y + 1, len(wrapped))
-                              if not wrapped[r - 1])
+            line_index = sum(1 for r in range(line_start)
+                             if r == 0 or not wrapped[r - 1])
 
         old_auto_breaks_before_cursor = 0
         for i in range(cur_y):
@@ -1080,8 +1080,8 @@ class TerminalBuffer:
         if cur_offset is not None:
             starts = [r for r in range(len(_new_wrap))
                       if r == 0 or not _new_wrap[r - 1]]     # first row of each logical line
-            if len(starts) > lines_below:
-                first = len(starts) - 1 - lines_below       # the cursor's logical line
+            first = line_index + max(filler, 0)             # rows added on top (filler) are lines of their own
+            if first < len(starts):                         # the cursor's logical line
                 top = starts[first]
                 end = starts[first + 1] if first + 1 < len(starts) else len(_new_wrap)
                 row = min(top + cur_offset // row_len, end - 1)
