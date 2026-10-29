@@ -516,10 +516,16 @@ class Terminal(TerminalBuffer, QWidget):
     def _switch_cursor_blink(self, state, blink=True):
         self._cursor_blinking_lock.lock()
 
-        if state != CursorState.UNFOCUSED and blink:
-            self._cursor_blinking_timer.start(50)
-        else:
-            self._cursor_blinking_timer.stop()
+        try:
+            if state != CursorState.UNFOCUSED and blink:
+                self._cursor_blinking_timer.start(50)
+            else:
+                self._cursor_blinking_timer.stop()
+        except RuntimeError:
+            # At shutdown Qt moves the focus while the timer's C++ object is
+            # already deleted; there is nothing left to blink or paint.
+            self._cursor_blinking_lock.unlock()
+            return
         self._cursor_blinking_state = state
 
         self._cursor_blinking_lock.unlock()
