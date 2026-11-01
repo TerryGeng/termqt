@@ -1081,13 +1081,12 @@ class TerminalBuffer:
 
         cur_y -= max(0, old_auto_breaks_before_cursor - new_auto_breaks_before_cursor)
 
-        filler = old_buf_col_len - len(_new_buffer)
-        if filler > 0:
-            cur_y += filler
-
-        for i in range(filler):
-            _new_buffer.appendleft([None for x in range(row_len)])
-            _new_wrap.appendleft(False)
+        # >>> FIX 16 no blank rows added on top when the re-flow made the text shorter.  The original padded the top
+        #     with `old length - new length` blank rows (and moved the cursor down by that many), so the buffer never
+        #     got shorter.  Widening the window merged rows and padded the top; narrowing re-flowed those blank rows as
+        #     lines of their own: every narrow-then-wide cycle added the same number of empty lines above the text
+        #     (visible by scrolling up).  If the buffer is now shorter than the screen, FIX 9 adds rows at the bottom.
+        # <<< END FIX 16
 
         # >>> FIX 9 (2/2) same, after a re-wrap (the width changed too)
         # the screen got taller: a row in the buffer for every screen row
@@ -1117,7 +1116,7 @@ class TerminalBuffer:
         if cur_offset is not None:
             starts = [r for r in range(len(_new_wrap))
                       if r == 0 or not _new_wrap[r - 1]]     # first row of each logical line
-            first = line_index + max(filler, 0)             # rows added on top (filler) are lines of their own
+            first = line_index                              # (FIX 16: no rows are added on top any more)
             if first < len(starts):                         # the cursor's logical line
                 top = starts[first]
                 end = starts[first + 1] if first + 1 < len(starts) else len(_new_wrap)
