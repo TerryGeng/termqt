@@ -40,7 +40,8 @@ class ControlChar(Enum):
     SYN = 22  # Ctrl-V
     ETB = 23  # Ctrl-W, end of xmit block, bash shortcut for cut the word before cursor
     CAN = 24  # Ctrl-X, cancel
-    EM = 25,  # Ctrl-Y, end of medium, bash shortcut for paste
+    # FIX 12 (one line): was `EM = 25,` -- the trailing comma made the value a tuple (25,), so Ctrl+Y sent nothing
+    EM =  25  # Ctrl-Y, end of medium, bash shortcut for paste
     SUB = 26  # Ctrl-Z, substitute
     ESC = 27  # Ctrl-[, escape
 
@@ -641,6 +642,9 @@ class EscapeProcessor:
 
 
 class TerminalBuffer:
+    # >>> FIX 1 (1/3) deferred wrap: the flag and the property that clears it.
+    #     Fixes a long prompt overwriting its own first row (the cursor was clamped to the last
+    #     column and the owed wrap forgotten).  Other parts: write() twice, below.
     # Deferred wrap (VT100 "last column flag").  A write that fills the last
     # column does not move the cursor to the next row: the cursor stays on the
     # last column and a wrap is *owed*; the next printable character pays it
@@ -656,6 +660,7 @@ class TerminalBuffer:
     def _cursor_position(self, pos):
         self._cursor_pos = pos
         self._wrap_pending = False
+    # <<< END FIX 1 (1/3)
 
     def __init__(self,
                  row_len,
@@ -804,10 +809,12 @@ class TerminalBuffer:
                             line_text += line[col].char if line[col] else ' '
                         elif start.y < row < end.y:
                             line_text += line[col].char if line[col] else ' '
+                    # >>> FIX 6 (1/2) copy: join soft-wrapped rows (the original always ended a row with a newline)
                     if row < end.y and self._line_wrapped_flags[row]:
                         selected_text += line_text      # soft-wrapped: the line goes on in the next row
                     else:
                         selected_text += line_text.rstrip() + '\n'
+                    # <<< END FIX 6 (1/2)
             return selected_text.strip('\n')
         return ""
 
@@ -820,6 +827,7 @@ class TerminalBuffer:
 
     def _get_all_text_rstrip(self):
         all_text = []
+        # >>> FIX 6 (2/2) copy all: same, join soft-wrapped rows
         joined = ''
         for y, row in enumerate(self._buffer):
             line_text = ''.join(c.char if c else ' ' for c in row)
@@ -830,6 +838,7 @@ class TerminalBuffer:
                 joined = ''
         if joined:
             all_text.append(joined.rstrip())
+        # <<< END FIX 6 (2/2)
 
         # Remove empty lines at the end of the buffer
         while all_text and not all_text[-1]:
@@ -917,10 +926,13 @@ class TerminalBuffer:
 
         if old_row_len == row_len:
             self.col_len = col_len
+            # >>> FIX 9 (1/2) the window got taller at the same width: add the missing buffer rows
+            #     (`clear` crashed on the missing rows)
             # the screen got taller: the buffer must have a row for every screen row
             while len(self._buffer) < col_len:
                 self._buffer.append([None for x in range(row_len)])
                 self._line_wrapped_flags.append(False)
+            # <<< END FIX 9 (1/2)
             self._buffer_display_offset = max(len(self._buffer) - self.col_len, 0)
             self.update_scroll_position()
 
@@ -928,6 +940,8 @@ class TerminalBuffer:
             self.resize_callback(col_len, row_len)
             return
 
+        # >>> FIX 4+10 (1/2) cursor after a width change: before the re-wrap, remember where the cursor
+        #     is inside its logical line (the original kept the old column, wrong once the rows are re-split)
         # Where the cursor is within its logical line (a chain of rows joined by
         # soft wraps), so it can be found again once the rows are re-split:
         # its character offset from the line's first row, and its index among
@@ -942,6 +956,7 @@ class TerminalBuffer:
             cur_offset = (cur_y - line_start) * old_row_len + cur_x
             line_index = sum(1 for r in range(line_start)
                              if r == 0 or not wrapped[r - 1])
+        # <<< END FIX 4+10 (1/2)
 
         old_auto_breaks_before_cursor = 0
         for i in range(cur_y):
@@ -1056,10 +1071,12 @@ class TerminalBuffer:
             _new_buffer.appendleft([None for x in range(row_len)])
             _new_wrap.appendleft(False)
 
+        # >>> FIX 9 (2/2) same, after a re-wrap (the width changed too)
         # the screen got taller: a row in the buffer for every screen row
         while len(_new_buffer) < col_len:
             _new_buffer.append([None for x in range(row_len)])
             _new_wrap.append(False)
+        # <<< END FIX 9 (2/2)
 
         while len(self._buffer) > self.maximum_line_history:
             _new_buffer.popleft()
@@ -1074,6 +1091,8 @@ class TerminalBuffer:
 
         self._line_wrapped_flags = _new_wrap
         # self.logger.info(f"cursor: ({cur_x}, {cur_y})")
+        # >>> FIX 4+10 (2/2) cursor after a width change: after the re-wrap, put it back at the same
+        #     offset in the same logical line (found by its index from the top: fix 10)
         # The counting above keeps the cursor's column, which is wrong once the
         # rows are re-split.  Put it at the same offset in the same logical line.
         cursor = Position(min(cur_x, row_len), cur_y)
@@ -1089,6 +1108,7 @@ class TerminalBuffer:
                 # past the right edge (x == row_len): a wrap is owed
                 cursor = Position(min(cur_offset - (row - top) * row_len, row_len), row)
         self._cursor_position = cursor
+        # <<< END FIX 4+10 (2/2)
 
         self._buffer_lock.unlock()
 
@@ -1108,9 +1128,11 @@ class TerminalBuffer:
 
         if not pos:
             pos = self._cursor_position
+            # >>> FIX 1 (2/3) deferred wrap: honour the owed wrap (was just `pos_x = pos.x`)
             # an owed wrap: start at the right edge, the first printable
             # character does not fit there and wraps (a '\n' just moves down)
             pos_x = row_len if self._wrap_pending else pos.x
+            # <<< END FIX 1 (2/3)
             pos_y = pos.y
         else:
             pos_x = pos.x
@@ -1164,9 +1186,11 @@ class TerminalBuffer:
         if set_cursor:
             # assert pos_x <= row_len
             self._cursor_position = Position(min(pos_x, row_len-1), pos_y)
+            # >>> FIX 1 (3/3) deferred wrap: record the owed wrap when the row got full
             # the row is full: the cursor waits on the last column, a wrap is owed
             # (set after the position: assigning the position clears the flag)
             self._wrap_pending = pos_x == row_len
+            # <<< END FIX 1 (3/3)
 
         if reset_offset:
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,

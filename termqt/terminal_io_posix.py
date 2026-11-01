@@ -152,7 +152,7 @@ class TerminalPOSIXIO(TerminalIO, ABC):
             os.kill(self.pid, signal.SIGTERM)
 
             def _check_killed():
-                time.sleep(3000)
+                time.sleep(3)       # FIX 14: was time.sleep(3000), i.e. 50 minutes before the SIGKILL
                 if self.is_alive():
                     os.kill(self.pid, signal.SIGKILL)
 
@@ -161,7 +161,7 @@ class TerminalPOSIXIO(TerminalIO, ABC):
 
     def is_alive(self):
         try:
-            os.kill(self.pif, 0)
+            os.kill(self.pid, 0)    # FIX 13: was self.pif (typo)
             return True
         except OSError:
             self.running = False
