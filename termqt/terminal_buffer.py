@@ -147,6 +147,13 @@ class EscapeProcessor:
         self._cmd = ""
         self._mark = ""
         self._buffer = ""
+        # >>> FIX 15 (1/5) default colors: what a reset (ESC[0m, ESC[39m, ESC[49m) returns to.  The original always
+        #     returned to Qt.white / Qt.black, ignoring the colors the application chose with set_fg / set_bg, so
+        #     all text after the first reset was drawn in other colors than the text before it.
+        #     TerminalBuffer.set_fg / set_bg keep these two up to date.
+        self.default_fg = DEFAULT_FG_COLOR
+        self.default_bg = DEFAULT_BG_COLOR
+        # <<< END FIX 15 (1/5)
 
         self._esc_func = {
             'M': self._esc_m,
@@ -545,8 +552,8 @@ class EscapeProcessor:
 
         if len(self._args) == 0:
             bold, underline, reverse = 0, 0, 0
-            color = DEFAULT_FG_COLOR
-            bg_color = DEFAULT_BG_COLOR
+            color = self.default_fg         # FIX 15 (2/5): was DEFAULT_FG_COLOR
+            bg_color = self.default_bg      # FIX 15 (2/5): was DEFAULT_BG_COLOR
 
         while i < len(self._args):
             arg = self._get_args(i, default=0)
@@ -554,8 +561,8 @@ class EscapeProcessor:
                 i += 1
                 if arg == 0:
                     bold, underline, reverse = 0, 0, 0
-                    color = DEFAULT_FG_COLOR
-                    bg_color = DEFAULT_BG_COLOR
+                    color = self.default_fg         # FIX 15 (2/5): was DEFAULT_FG_COLOR
+                    bg_color = self.default_bg      # FIX 15 (2/5): was DEFAULT_BG_COLOR
                 elif arg == 1:
                     bold = 1
                 elif arg == 4:
@@ -601,12 +608,12 @@ class EscapeProcessor:
 
             elif arg == 39:
                 i += 1
-                color = DEFAULT_FG_COLOR
+                color = self.default_fg             # FIX 15 (2/5): was DEFAULT_FG_COLOR
                 continue
 
             elif arg == 49:
                 i += 1
-                bg_color = DEFAULT_BG_COLOR
+                bg_color = self.default_bg          # FIX 15 (2/5): was DEFAULT_BG_COLOR
                 continue
 
             else:
@@ -706,6 +713,10 @@ class TerminalBuffer:
 
         self._bg_color = DEFAULT_BG_COLOR
         self._fg_color = DEFAULT_FG_COLOR
+        # >>> FIX 15 (3/5) default colors: the colors a reset returns to (set_fg / set_bg change them)
+        self._default_bg = DEFAULT_BG_COLOR
+        self._default_fg = DEFAULT_FG_COLOR
+        # <<< END FIX 15 (3/5)
 
         # initialize alternative screen buffer, which is a xterm feature.
         # when activating alternative buffer, normal buffer will be saved in
@@ -865,11 +876,18 @@ class TerminalBuffer:
         ep.enable_auto_wrap = self.enable_auto_wrap
         ep.insert_space_cb = self.insert_space
 
+    # >>> FIX 15 (4/5) default colors: set_bg / set_fg set the application's colors, so they are also what
+    #     a reset returns to (here and in the escape processor), not the library's white on black
     def set_bg(self, color: QColor):
         self._bg_color = color
+        self._default_bg = color
+        self.escape_processor.default_bg = color
 
     def set_fg(self, color: QColor):
         self._fg_color = color
+        self._default_fg = color
+        self.escape_processor.default_fg = color
+    # <<< END FIX 15 (4/5)
 
     def set_style(self, color, bg_color, bold, underline, reverse):
         self._fg_color = color if color else self._fg_color
@@ -1374,8 +1392,8 @@ class TerminalBuffer:
         self._underline = False
         self._reversed = False
 
-        self._fg_color = DEFAULT_FG_COLOR
-        self._bg_color = DEFAULT_BG_COLOR
+        self._fg_color = self._default_fg       # FIX 15 (5/5): was DEFAULT_FG_COLOR
+        self._bg_color = self._default_bg       # FIX 15 (5/5): was DEFAULT_BG_COLOR
 
     def toggle_alt_screen_save_cursor(self, on=True):
         if on:

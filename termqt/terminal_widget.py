@@ -370,7 +370,7 @@ class Terminal(TerminalBuffer, QWidget):
 
         offset = self._buffer_display_offset
 
-        qp.fillRect(self.rect(), DEFAULT_BG_COLOR)
+        qp.fillRect(self.rect(), self._default_bg)      # FIX 15 (5/5): was DEFAULT_BG_COLOR
 
         in_selection = False
         start_col = start_row = end_col = end_row = None
@@ -472,8 +472,8 @@ class Terminal(TerminalBuffer, QWidget):
         ch = self.char_height
 
         qp = QPainter(self._canvas)
-        fg = DEFAULT_FG_COLOR
-        bg = DEFAULT_BG_COLOR
+        fg = self._default_fg           # FIX 15 (5/5): was DEFAULT_FG_COLOR
+        bg = self._default_bg           # FIX 15 (5/5): was DEFAULT_BG_COLOR
 
         if self._cursor_blinking_state == CursorState.UNFOCUSED:
             outline = QPen(fg)
