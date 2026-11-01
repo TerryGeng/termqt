@@ -579,32 +579,22 @@ class EscapeProcessor:
 
             elif 30 <= arg <= 37 or 40 <= arg <= 47 or \
                     90 <= arg <= 97 or 100 <= arg <= 107:
-                if arg >= 90:
+                # >>> FIX 18 colors 30-37 / 40-47 / 90-97 / 100-107: each is one parameter.  The original looked at
+                #     the NEXT parameter after a 30-37 / 40-47 color and, if it was 0 or 1, swallowed it as "normal /
+                #     bright" (so `31;1` gave bright red and no bold, `31;0` ignored the reset), and if it was anything
+                #     else it dropped the color (`31;47` and `31;4` lost the red).  Now a color is just a color and
+                #     the next parameter is handled on its own; 90-97 / 100-107 are the bright ones.
+                i += 1
+                bright = arg >= 90
+                if bright:
                     arg -= 60
-                    arg1 = 1
-                    i += 1
-                else:
-                    if i + 1 < len(self._args):
-                        arg1 = self._get_args(i+1, default=0)
-                    else:
-                        arg1 = 0
-
-                    if arg1 == 0 or arg1 == 1:
-                        i += 2
-                    else:
-                        i += 1
-
+                palette = colors16 if bright else colors8
                 if arg <= 37:
-                    if arg1 == 0:  # foreground 8 colors
-                        color = colors8[arg]
-                    elif arg1 == 1:  # foreground 16 colors
-                        color = colors16[arg]
-                elif 40 <= arg < 50:
-                    if arg1 == 0:  # background 8 colors
-                        bg_color = colors8[arg - 10]
-                    elif arg1 == 1:  # background 16 colors
-                        bg_color = colors16[arg - 10]
+                    color = palette[arg]            # foreground
+                else:
+                    bg_color = palette[arg - 10]    # background
                 continue
+                # <<< END FIX 18
 
             elif arg == 39:
                 i += 1
