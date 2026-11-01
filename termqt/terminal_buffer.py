@@ -775,8 +775,11 @@ class TerminalBuffer:
     def get_selection(self):
         # Ensure the selection is ordered correctly
         if self._selection_start and self._selection_end:
-            start = min(self._selection_start, self._selection_end)
-            end = max(self._selection_start, self._selection_end)
+            # >>> FIX 17 selection order: by row first, then column.  Position is (x, y), so min / max compared the
+            #     column first: with the end on another row and a smaller column than the start (dragging down-left
+            #     or up-right) the "start" came out below the "end" and the copied text was empty.
+            start, end = sorted((self._selection_start, self._selection_end), key=lambda p: (p.y, p.x))
+            # <<< END FIX 17
             return start, end
         return None, None
 
