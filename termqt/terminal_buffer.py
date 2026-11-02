@@ -936,6 +936,12 @@ class TerminalBuffer:
     def resize(self, row_len, col_len):
         cur_x = self._cursor_position.x
         cur_y = self._cursor_position.y
+        # >>> FIX 21 (1/3) an owed wrap must survive a resize.  A cursor with `_wrap_pending` sits on the last cell
+        #     but is logically one cell AFTER it; resize used the cell itself and assigned the new cursor through
+        #     the property setter, which clears the flag, so the next character overwrote the last one
+        #     instead of continuing the line.
+        wrap_pending = self._wrap_pending
+        # <<< END FIX 21 (1/3)
 
         do_auto_wrap = self.auto_wrap_enabled
 
@@ -979,7 +985,7 @@ class TerminalBuffer:
             line_start = cur_y
             while line_start > 0 and wrapped[line_start - 1]:
                 line_start -= 1
-            cur_offset = (cur_y - line_start) * old_row_len + cur_x
+            cur_offset = (cur_y - line_start) * old_row_len + cur_x + (1 if wrap_pending else 0)    # FIX 21 (2/3)
             line_index = sum(1 for r in range(line_start)
                              if r == 0 or not wrapped[r - 1])
         # <<< END FIX 4+10 (1/2)
@@ -1129,11 +1135,16 @@ class TerminalBuffer:
                 top = starts[first]
                 end = starts[first + 1] if first + 1 < len(starts) else len(_new_wrap)
                 row = min(top + cur_offset // row_len, end - 1)
-                # a line that exactly fills its last row leaves the cursor just
-                # past the right edge (x == row_len): a wrap is owed
+                # the cursor may land just past the right edge (x == row_len): see FIX 21 (3/3)
                 cursor = Position(min(cur_offset - (row - top) * row_len, row_len), row)
         self._cursor_position = cursor
         # <<< END FIX 4+10 (2/2)
+        # >>> FIX 21 (3/3) past the right edge means "a wrap is owed", the state write() leaves: the last
+        #     column plus _wrap_pending (assigning the position clears the flag, so it is set after)
+        if cursor.x >= row_len:
+            self._cursor_position = Position(row_len - 1, cursor.y)
+            self._wrap_pending = True
+        # <<< END FIX 21 (3/3)
         self._buffer_display_offset = self._offset_showing_content()     # FIX 20: the cursor is known now
         self.update_scroll_position()
 
