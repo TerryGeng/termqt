@@ -918,6 +918,21 @@ class TerminalBuffer:
         self._line_wrapped_flags = _new_wrap
         self._cursor_position = Position(0, 0)
 
+    # >>> FIX 20 keep the content in view when the window gets shorter.  After a resize the original always showed
+    #     the LAST rows of the buffer.  The buffer has blank rows below the content (the screen is always filled with
+    #     rows, fix 9), so a fresh terminal made shorter showed only those blank rows, with the prompt scrolled out
+    #     of view above them: a tab split in two, whose panes are half as tall, looked empty.  Now the view ends at
+    #     the last row that matters (the cursor, or the last row with text), and starts at the top when the content
+    #     fits.
+    def _offset_showing_content(self):
+        last = self._cursor_position.y
+        for y in range(len(self._buffer) - 1, last, -1):
+            if any(self._buffer[y]):
+                last = y
+                break
+        return max(0, min(len(self._buffer) - self.col_len, last - self.col_len + 1))
+    # <<< END FIX 20
+
     def resize(self, row_len, col_len):
         cur_x = self._cursor_position.x
         cur_y = self._cursor_position.y
@@ -944,7 +959,7 @@ class TerminalBuffer:
                 self._buffer.append([None for x in range(row_len)])
                 self._line_wrapped_flags.append(False)
             # <<< END FIX 9 (1/2)
-            self._buffer_display_offset = max(len(self._buffer) - self.col_len, 0)
+            self._buffer_display_offset = self._offset_showing_content()     # FIX 20: was max(len - col_len, 0)
             self.update_scroll_position()
 
             self._buffer_lock.unlock()
@@ -1119,6 +1134,8 @@ class TerminalBuffer:
                 cursor = Position(min(cur_offset - (row - top) * row_len, row_len), row)
         self._cursor_position = cursor
         # <<< END FIX 4+10 (2/2)
+        self._buffer_display_offset = self._offset_showing_content()     # FIX 20: the cursor is known now
+        self.update_scroll_position()
 
         self._buffer_lock.unlock()
 
