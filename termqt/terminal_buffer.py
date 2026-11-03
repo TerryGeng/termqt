@@ -923,28 +923,142 @@ class TerminalBuffer:
     #     rows, fix 9), so a fresh terminal made shorter showed only those blank rows, with the prompt scrolled out
     #     of view above them: a tab split in two, whose panes are half as tall, looked empty.  Now the view ends at
     #     the last row that matters (the cursor, or the last row with text), and starts at the top when the content
-    #     fits.
-    def _offset_showing_content(self):
-        last = self._cursor_position.y
-        for y in range(len(self._buffer) - 1, last, -1):
-            if any(self._buffer[y]):
+    #     fits.  (buffer / cursor: the saved normal screen of the alternate screen is measured the same way.)
+    def _offset_showing_content(self, buffer=None, cursor=None):
+        buffer = self._buffer if buffer is None else buffer
+        cursor = self._cursor_position if cursor is None else cursor
+        last = cursor.y
+        for y in range(len(buffer) - 1, last, -1):
+            if any(buffer[y]):
                 last = y
                 break
-        return max(0, min(len(self._buffer) - self.col_len, last - self.col_len + 1))
+        return max(0, min(len(buffer) - self.col_len, last - self.col_len + 1))
     # <<< END FIX 20
 
+    # >>> FIX 22 resize rewritten as two phases.  The original poured the old rows into new rows cell by cell and
+    #     kept the cursor right with counters (soft breaks before it, a "breaked" flag, "empty_ahead", a filler);
+    #     fixes 4, 10, 16 and 21 were patches on that.  Now:
+    #       1. _logical_lines: the rows joined by soft wraps into logical lines (the lines as the shell wrote them),
+    #          with the cursor as (line, offset in the line);
+    #       2. _layout: each line is cut into rows of the new width, and the cursor is found while placing.
+    #     The cursor is then just a coordinate carried through both phases.  The alternate screen is not re-flowed
+    #     (a full-screen program redraws itself on SIGWINCH): it is cropped or padded, and the NORMAL screen saved
+    #     behind it is re-flowed, which the original never did (it came back at the old width).
+
+    def _pad_rows(self, buffer, flags, row_len, col_len):
+        # FIX 9 (kept by the rewrite): the buffer always has a row for every screen row
+        while len(buffer) < col_len:
+            buffer.append([None for x in range(row_len)])
+            flags.append(False)
+
+    def _logical_lines(self, buffer, flags, cursor, pending):
+        """Phase 1: -> (lines, cursor_line, cursor_offset).  A line is a list of cells, the rows joined by soft wraps,
+        LEAD padding dropped, the never-written cells at its end dropped.  The offset counts the cells before the
+        cursor; an owed wrap (pending) puts the cursor one cell after the last one.  A cursor in the never-written
+        part of a line is put right after the text (a program that places the cursor there redraws on resize).
+        (LEAD padding only ever sits at the end of a row, so it is cut off the end, not searched for.)"""
+        LEAD = Placeholder.LEAD
+        lines, cells = [], []
+        cur_line = cur_off = None
+        for y, (row, wrapped) in enumerate(zip(buffer, flags)):
+            n = len(row)
+            while n and row[n - 1] is not None and row[n - 1].placeholder == LEAD:
+                n -= 1
+            if y == cursor.y:
+                cur_line, cur_off = len(lines), len(cells) + min(cursor.x, n) + (1 if pending else 0)
+            if not wrapped:                         # the end of a line: its never-written cells are not text
+                while n and row[n - 1] is None:
+                    n -= 1
+            cells.extend(row[:n])
+            if not wrapped:
+                while cells and cells[-1] is None:
+                    cells.pop()
+                lines.append(cells)
+                cells = []
+        if cells:                       # the last row is flagged as wrapped (it should not be): keep its cells
+            lines.append(cells)
+        if not lines:
+            lines.append([])
+        if cur_line is None:            # a cursor below the last row: on the last line, at its end
+            cur_line, cur_off = len(lines) - 1, len(lines[-1])
+        return lines, cur_line, min(cur_off, len(lines[cur_line]))
+
+    def _layout(self, lines, cur_line, cur_off, row_len):
+        """Phase 2: cut the lines into rows of row_len -> (rows, flags, cursor, pending).  A row that is full and has
+        more cells after it is flagged as soft-wrapped, and the next cell starts the next row (so a line that ends
+        exactly at the edge gets no empty row after it).  A wide character that does not fit moves to the next row
+        and leaves LEAD padding.  Without auto-wrap, cells beyond the edge pile up on the last column."""
+        wrap = self.auto_wrap_enabled
+        rows, flags = deque(), deque()
+        cursor, pending = Position(0, 0), False
+        for li, cells in enumerate(lines):
+            if wrap and not any(c is not None and c.char_width != 1 for c in cells):
+                # the usual line (no wide characters): cut it with slices
+                count = len(cells)
+                first = len(rows)
+                for i in range(0, max(count, 1), row_len):
+                    chunk = cells[i:i + row_len]
+                    rows.append(chunk + [None for x in range(row_len - len(chunk))])
+                    flags.append(True)
+                flags[-1] = False
+                if li == cur_line:
+                    if cur_off < count:
+                        r, x = divmod(cur_off, row_len)
+                    else:                                   # after the last cell
+                        r = max(count - 1, 0) // row_len
+                        x = count - r * row_len
+                    cursor = Position(x, first + r)
+                    if x >= row_len:                        # past the edge: the state write() leaves, a wrap is owed
+                        cursor, pending = Position(row_len - 1, first + r), True
+                continue
+            row = [None for x in range(row_len)]
+            rows.append(row)
+            flags.append(False)
+            x, pos = 0, None
+            for i, c in enumerate(cells):
+                width = min(c.char_width if c is not None else 1, row_len)
+                if wrap and x + width > row_len:
+                    for j in range(x, row_len):
+                        row[j] = Char("", 0, Placeholder.LEAD)
+                    flags[-1] = True
+                    row = [None for x in range(row_len)]
+                    rows.append(row)
+                    flags.append(False)
+                    x = 0
+                if li == cur_line and i == cur_off:
+                    pos = Position(x, len(rows) - 1)
+                row[min(x, row_len - 1)] = c
+                x += 1
+            if li == cur_line:
+                if pos is None:                         # after the last cell
+                    pos = Position(x, len(rows) - 1)
+                if pos.x >= row_len:                    # past the edge: the state write() leaves, a wrap is owed
+                    pos, pending = Position(row_len - 1, pos.y), wrap
+                cursor = pos
+        return rows, flags, cursor, pending
+
+    def _crop(self, buffer, cursor, pending, row_len):
+        """The alternate screen: no re-flow, each row is cut or padded to the new width -> (rows, flags, cursor, pending)."""
+        rows = deque()
+        for row in buffer:
+            new = list(row[:row_len]) + [None for x in range(row_len - len(row))]
+            if new[-1] is not None and new[-1].char_width > 1:      # half a wide character
+                new[-1] = None
+            rows.append(new)
+        x = min(cursor.x, row_len - 1)
+        return rows, deque(False for r in rows), Position(x, cursor.y), pending and x == cursor.x
+
+    def _fit(self, rows, flags, cursor, row_len, col_len):
+        """A screen with a row for every screen row (fix 9) and at most maximum_line_history rows -> (rows, flags, cursor)."""
+        self._pad_rows(rows, flags, row_len, col_len)
+        while len(rows) > self.maximum_line_history:
+            rows.popleft()
+            flags.popleft()
+            cursor = Position(cursor.x, max(cursor.y - 1, 0))
+        return rows, flags, cursor
+
     def resize(self, row_len, col_len):
-        cur_x = self._cursor_position.x
-        cur_y = self._cursor_position.y
-        # >>> FIX 21 (1/3) an owed wrap must survive a resize.  A cursor with `_wrap_pending` sits on the last cell
-        #     but is logically one cell AFTER it; resize used the cell itself and assigned the new cursor through
-        #     the property setter, which clears the flag, so the next character overwrote the last one
-        #     instead of continuing the line.
-        wrap_pending = self._wrap_pending
-        # <<< END FIX 21 (1/3)
-
-        do_auto_wrap = self.auto_wrap_enabled
-
+        row_len, col_len = max(row_len, 1), max(col_len, 1)
         assert col_len <= self.maximum_line_history
 
         if not self._buffer:
@@ -952,206 +1066,49 @@ class TerminalBuffer:
             return
 
         self._buffer_lock.lock()
-
         old_row_len = self.row_len
-        old_buf_col_len = len(self._buffer)
+        self.col_len = col_len
+        saved = self._alt_buffer is not None        # the alternate screen is on: _alt_* is the normal screen behind it
 
         if old_row_len == row_len:
-            self.col_len = col_len
-            # >>> FIX 9 (1/2) the window got taller at the same width: add the missing buffer rows
-            #     (`clear` crashed on the missing rows)
-            # the screen got taller: the buffer must have a row for every screen row
-            while len(self._buffer) < col_len:
-                self._buffer.append([None for x in range(row_len)])
-                self._line_wrapped_flags.append(False)
-            # <<< END FIX 9 (1/2)
-            self._buffer_display_offset = self._offset_showing_content()     # FIX 20: was max(len - col_len, 0)
+            # only the height changed: no re-flow, just the rows the taller screen needs
+            self._pad_rows(self._buffer, self._line_wrapped_flags, row_len, col_len)
+            self._buffer_display_offset = self._offset_showing_content()
+            if saved:
+                self._pad_rows(self._alt_buffer, self._alt_line_wrapped_flags, row_len, col_len)
+                self._alt_buffer_display_offset = self._offset_showing_content(self._alt_buffer, self._alt_cursor_position)
             self.update_scroll_position()
-
             self._buffer_lock.unlock()
             self.resize_callback(col_len, row_len)
             return
 
-        # >>> FIX 4+10 (1/2) cursor after a width change: before the re-wrap, remember where the cursor
-        #     is inside its logical line (the original kept the old column, wrong once the rows are re-split)
-        # Where the cursor is within its logical line (a chain of rows joined by
-        # soft wraps), so it can be found again once the rows are re-split:
-        # its character offset from the line's first row, and its index among
-        # the logical lines (counted from the top: blank rows below the cursor,
-        # or rows added below it later, must not move it).
-        cur_offset = line_index = None
-        if cur_y < len(self._line_wrapped_flags):
-            wrapped = self._line_wrapped_flags
-            line_start = cur_y
-            while line_start > 0 and wrapped[line_start - 1]:
-                line_start -= 1
-            cur_offset = (cur_y - line_start) * old_row_len + cur_x + (1 if wrap_pending else 0)    # FIX 21 (2/3)
-            line_index = sum(1 for r in range(line_start)
-                             if r == 0 or not wrapped[r - 1])
-        # <<< END FIX 4+10 (1/2)
-
-        old_auto_breaks_before_cursor = 0
-        for i in range(cur_y):
-            if self._line_wrapped_flags[i]:
-                old_auto_breaks_before_cursor += 1
-
-        self.logger.info(f"screen: resize triggered, new size ({row_len}x"
-                         f"{col_len})")
-
-        _new_buffer = deque([[None for x in range(row_len)]])
-        _new_wrap = deque([False])
-
-        new_y = 0
-        new_x = 0
-        new_auto_breaks_before_cursor = 0
-        breaked = False
-
-        # linebreaks SHOULD be insert when:
-        #  1. reaching the end of a not auto-breaked line
-        #  2. an auto-breaked line is about to overflow
-        # SHOULD NOT be inserted when:
-        #  3. reaching the end of an auto-breaked line
-        #  4. one empty line is breaked into two empty lines i.e. breaking
-        #    whitespaces into the next line
-        #
-        # When the new row length is the integer multiple of the length of
-        # the old row, criteria 1 and 2 will be satisfied simultaneously,
-        # we must be careful not to create two linebreaks but only one.
-
-        for y, old_row in enumerate(self._buffer):
-            if y > 0:
-                # if last line was unfinished and was automantically
-                # wrapped into the next line in the old screen, this flag
-                # will be True, which means we don't need to wrap it again
-                if not self._line_wrapped_flags[y-1]:
-                    if not breaked:
-                        # The _breaked_ flag is used to avoid
-                        # breaking the same line twice
-                        # under the case that the new row length is the
-                        # integer multiple of the length of the old row
-                        _new_buffer.append([None for x in range(row_len)])
-                        _new_wrap.append(False)
-                        new_y += 1
-                        new_x = 0
-
-            x = -1
-            while x + 1 < len(old_row):
-                x += 1
-                c = old_row[x]
-
-                # clear _breaked_ flag
-                # note that it should only be set when the new row length
-                # is the integer multiple of the length of the old row
-                # under which we should avoid an extra line break being
-                # inserted
-                breaked = False
-
-                if c and c.placeholder == Placeholder.LEAD:
-                    continue
-
-                width = c.char_width if c else 1
-
-                if new_x + width > row_len:
-                    # char too wide to fit into this row
-                    while new_x < row_len:
-                        _new_buffer[new_y][new_x] = Char("", 0, Placeholder.LEAD)
-                        new_x += 1
-                    x -= 1
-                else:
-                    _new_buffer[new_y][new_x] = c
-                    new_x += 1
-
-                if new_x >= row_len:
-                    if not do_auto_wrap:
-                        new_x = row_len - 1
-                        continue
-
-                    empty_ahead = all(map(lambda c: not c or c.placeholder != Placeholder.NON,
-                                          old_row[x+1:]))
-
-                    if y == old_buf_col_len - 1 and empty_ahead:
-                        # avoid creating extra new lines after last line
-                        break
-
-                    _new_buffer.append([None for x in range(row_len)])
-                    _new_wrap.append(False)
-                    new_y += 1
-                    new_x = 0
-                    breaked = True
-
-                    if empty_ahead and \
-                            not self._line_wrapped_flags[y]:
-                        # avoid wrapping a bunch of spaces into next line
-                        break
-                    else:
-                        # set the flag for a new auto-line wrap.
-                        new_auto_break_y = new_y - 1
-                        _new_wrap[new_auto_break_y] = True
-
-                        if new_auto_break_y < cur_y:
-                            new_auto_breaks_before_cursor += 1
-                            if new_auto_breaks_before_cursor > old_auto_breaks_before_cursor:
-                                cur_y += 1
-
-        cur_y -= max(0, old_auto_breaks_before_cursor - new_auto_breaks_before_cursor)
-
-        # >>> FIX 16 no blank rows added on top when the re-flow made the text shorter.  The original padded the top
-        #     with `old length - new length` blank rows (and moved the cursor down by that many), so the buffer never
-        #     got shorter.  Widening the window merged rows and padded the top; narrowing re-flowed those blank rows as
-        #     lines of their own: every narrow-then-wide cycle added the same number of empty lines above the text
-        #     (visible by scrolling up).  If the buffer is now shorter than the screen, FIX 9 adds rows at the bottom.
-        # <<< END FIX 16
-
-        # >>> FIX 9 (2/2) same, after a re-wrap (the width changed too)
-        # the screen got taller: a row in the buffer for every screen row
-        while len(_new_buffer) < col_len:
-            _new_buffer.append([None for x in range(row_len)])
-            _new_wrap.append(False)
-        # <<< END FIX 9 (2/2)
-
-        while len(self._buffer) > self.maximum_line_history:
-            _new_buffer.popleft()
-            self._line_wrapped_flags.popleft()
-            cur_y -= 1
+        self.logger.info(f"screen: resize triggered, new size ({row_len}x{col_len})")
+        if saved:
+            rows, flags, cursor, pending = self._crop(self._buffer, self._cursor_position, self._wrap_pending, row_len)
+            s_rows, s_flags, s_cursor, _ = self._layout(*self._logical_lines(
+                self._alt_buffer, self._alt_line_wrapped_flags, self._alt_cursor_position, False), row_len)
+            s_rows, s_flags, s_cursor = self._fit(s_rows, s_flags, s_cursor, row_len, col_len)
+            self._alt_buffer, self._alt_line_wrapped_flags = s_rows, s_flags
+            self._alt_cursor_position = s_cursor
+            self._alt_buffer_display_offset = self._offset_showing_content(s_rows, s_cursor)
+        else:
+            rows, flags, cursor, pending = self._layout(*self._logical_lines(
+                self._buffer, self._line_wrapped_flags, self._cursor_position, self._wrap_pending), row_len)
+        rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
 
         self.row_len = row_len
-        self.col_len = col_len
-        self._buffer = _new_buffer
-        self._buffer_display_offset = len(self._buffer) - self.col_len
-        self.update_scroll_position()
-
-        self._line_wrapped_flags = _new_wrap
-        # self.logger.info(f"cursor: ({cur_x}, {cur_y})")
-        # >>> FIX 4+10 (2/2) cursor after a width change: after the re-wrap, put it back at the same
-        #     offset in the same logical line (found by its index from the top: fix 10)
-        # The counting above keeps the cursor's column, which is wrong once the
-        # rows are re-split.  Put it at the same offset in the same logical line.
-        cursor = Position(min(cur_x, row_len), cur_y)
-        if cur_offset is not None:
-            starts = [r for r in range(len(_new_wrap))
-                      if r == 0 or not _new_wrap[r - 1]]     # first row of each logical line
-            first = line_index                              # (FIX 16: no rows are added on top any more)
-            if first < len(starts):                         # the cursor's logical line
-                top = starts[first]
-                end = starts[first + 1] if first + 1 < len(starts) else len(_new_wrap)
-                row = min(top + cur_offset // row_len, end - 1)
-                # the cursor may land just past the right edge (x == row_len): see FIX 21 (3/3)
-                cursor = Position(min(cur_offset - (row - top) * row_len, row_len), row)
+        self._buffer = rows
+        self._line_wrapped_flags = flags
         self._cursor_position = cursor
-        # <<< END FIX 4+10 (2/2)
-        # >>> FIX 21 (3/3) past the right edge means "a wrap is owed", the state write() leaves: the last
-        #     column plus _wrap_pending (assigning the position clears the flag, so it is set after)
-        if cursor.x >= row_len:
-            self._cursor_position = Position(row_len - 1, cursor.y)
-            self._wrap_pending = True
-        # <<< END FIX 21 (3/3)
-        self._buffer_display_offset = self._offset_showing_content()     # FIX 20: the cursor is known now
+        self._wrap_pending = pending            # after the position: assigning it clears the flag
+        self._buffer_display_offset = self._offset_showing_content()
         self.update_scroll_position()
+        self.reset_selection()                  # its cells moved: the selection would point at other text
 
         self._buffer_lock.unlock()
 
         self.resize_callback(col_len, row_len)
-        # self._log_buffer()
+    # <<< END FIX 22
 
     def write(self, text, pos: Position = None, set_cursor=False,
               reset_offset=True):
