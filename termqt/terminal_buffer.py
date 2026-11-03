@@ -948,7 +948,7 @@ class TerminalBuffer:
     def _pad_rows(self, buffer, flags, row_len, col_len):
         # FIX 9 (kept by the rewrite): the buffer always has a row for every screen row
         while len(buffer) < col_len:
-            buffer.append([None for x in range(row_len)])
+            buffer.append([None for _ in range(row_len)])
             flags.append(False)
 
     def _logical_lines(self, buffer, flags, cursor, pending):
@@ -998,7 +998,7 @@ class TerminalBuffer:
                 first = len(rows)
                 for i in range(0, max(count, 1), row_len):
                     chunk = cells[i:i + row_len]
-                    rows.append(chunk + [None for x in range(row_len - len(chunk))])
+                    rows.append(chunk + [None for _ in range(row_len - len(chunk))])
                     flags.append(True)
                 flags[-1] = False
                 if li == cur_line:
@@ -1011,7 +1011,7 @@ class TerminalBuffer:
                     if x >= row_len:                        # past the edge: the state write() leaves, a wrap is owed
                         cursor, pending = Position(row_len - 1, first + r), True
                 continue
-            row = [None for x in range(row_len)]
+            row = [None for _ in range(row_len)]
             rows.append(row)
             flags.append(False)
             x, pos = 0, None
@@ -1021,7 +1021,7 @@ class TerminalBuffer:
                     for j in range(x, row_len):
                         row[j] = Char("", 0, Placeholder.LEAD)
                     flags[-1] = True
-                    row = [None for x in range(row_len)]
+                    row = [None for _ in range(row_len)]
                     rows.append(row)
                     flags.append(False)
                     x = 0
@@ -1041,7 +1041,7 @@ class TerminalBuffer:
         """The alternate screen: no re-flow, each row is cut or padded to the new width -> (rows, flags, cursor, pending)."""
         rows = deque()
         for row in buffer:
-            new = list(row[:row_len]) + [None for x in range(row_len - len(row))]
+            new = list(row[:row_len]) + [None for _ in range(row_len - len(row))]
             if new[-1] is not None and new[-1].char_width > 1:      # half a wide character
                 new[-1] = None
             rows.append(new)
