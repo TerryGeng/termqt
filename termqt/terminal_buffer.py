@@ -1063,8 +1063,26 @@ class TerminalBuffer:
             rows.append(new)
         return rows, deque(False for r in rows), Position(min(cursor.x, row_len - 1), cursor.y)
 
+    # >>> FIX 25 a window made shorter kept its blank rows: the buffer always has a row for every screen row (fix 9), so
+    #     a terminal of 40 rows with 4 lines of text, made 20 rows high, still had 40 rows and the scroll bar could go
+    #     down through 20 blank ones (a split tab: the top pane could be scrolled far below its text).  A real
+    #     terminal drops the blank rows at the bottom.  Rows after the last one with text or the cursor go, but never
+    #     below one screenful.
+    def _trim_tail(self, buffer, flags, cursor, col_len):
+        keep = cursor.y + 1
+        for y in range(len(buffer) - 1, keep - 1, -1):
+            if any(buffer[y]):
+                keep = y + 1
+                break
+        keep = max(keep, col_len)
+        while len(buffer) > keep:
+            buffer.pop()
+            flags.pop()
+    # <<< END FIX 25
+
     def _fit(self, rows, flags, cursor, row_len, col_len):
         """A screen with a row for every screen row (fix 9) and at most maximum_line_history rows -> (rows, flags, cursor)."""
+        self._trim_tail(rows, flags, cursor, col_len)
         self._pad_rows(rows, flags, row_len, col_len)
         while len(rows) > self.maximum_line_history:
             rows.popleft()
@@ -1087,10 +1105,13 @@ class TerminalBuffer:
                                                     # _alt_* holds the regular screen it is hiding (see toggle_alt_screen)
 
         if old_row_len == row_len:
-            # only the height changed: no re-flow, just the rows the taller screen needs
+            # only the height changed: no re-flow, just the rows the taller screen needs (the blank rows a shorter one
+            # does not, fix 25)
+            self._trim_tail(self._buffer, self._line_wrapped_flags, self._cursor_position, col_len)
             self._pad_rows(self._buffer, self._line_wrapped_flags, row_len, col_len)
             self._buffer_display_offset = self._offset_showing_content()
             if alt_on:
+                self._trim_tail(self._alt_buffer, self._alt_line_wrapped_flags, self._alt_cursor_position, col_len)
                 self._pad_rows(self._alt_buffer, self._alt_line_wrapped_flags, row_len, col_len)
                 self._alt_buffer_display_offset = self._offset_showing_content(self._alt_buffer, self._alt_cursor_position)
             self.update_scroll_position()
