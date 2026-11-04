@@ -157,6 +157,7 @@ class EscapeProcessor:
 
         self._esc_func = {
             'M': self._esc_m,
+            '\\': lambda: None,       # ST, the end of an OSC string (FIX 24)
         }
 
         self._csi_func = {
@@ -362,17 +363,14 @@ class EscapeProcessor:
             self.fail()
 
         # === OSC ===
-        elif self._state == self.State.OSC_WAIT_FOR_NEXT_ARG:
-            if 20 <= c <= 126 and c != 59:  # every visible thing except ;
+        elif self._state == self.State.OSC_WAIT_FOR_NEXT_ARG or self._state == self.State.OSC_WAIT_FOR_ARG_FINISH:
+            # >>> FIX 24 OSC text: any character (not only ASCII 20..126, which was also a typo for 32) can be in a
+            #     title; claude sets "<spinner glyph> Claude Code", the glyph failed the sequence and the rest of the
+            #     title was printed on the screen.  An empty argument is allowed (ESC ] 0 ; BEL), and the ST that
+            #     ends a sequence, ESC \, is taken whole (see _esc_func).
+            if c >= 32 and c != 59 and c != 127:
                 self._arg_buf += chr(c)
                 self._enter_state(self.State.OSC_WAIT_FOR_ARG_FINISH)
-                return 1
-            else:
-                self.fail()
-
-        elif self._state == self.State.OSC_WAIT_FOR_ARG_FINISH:
-            if 20 <= c <= 126 and c != 59:  # every visible thing except ;
-                self._arg_buf += chr(c)
                 return 1
             elif c == 59:  # ord(';')
                 self._args.append(self._arg_buf)
@@ -382,9 +380,12 @@ class EscapeProcessor:
             elif c == 7 or c == 27:  # BEL, \x07 or ESC, \x1b
                 self._args.append(self._arg_buf)
                 self._enter_state(self.State.OSC_COMPLETE)
+                if c == 27:
+                    self._state = self.State.WAIT_FOR_BRAC_OR_CHAR      # the backslash of ST comes next
                 return 1
             else:
                 self.fail()
+            # <<< END FIX 24
 
         elif self._state == self.State.OSC_COMPLETE:
             # this branch should never be reached
@@ -454,7 +455,8 @@ class EscapeProcessor:
         try:
             op = int(self._args[0])
             if op in [0, 1, 2]:
-                text = self._args[1]
+                # the processor is fed bytes, so a non-ASCII title is still its UTF-8 bytes here: decode it
+                text = ';'.join(self._args[1:]).encode('latin-1', 'replace').decode('utf-8', 'replace')
                 self.set_window_title_cb(text)
         except (ValueError, IndexError):
             self.fail()
@@ -606,21 +608,34 @@ class EscapeProcessor:
                 bg_color = self.default_bg          # FIX 15 (2/5): was DEFAULT_BG_COLOR
                 continue
 
-            else:
-                if i + 2 < len(self._args):  # need two consecuted args
-                    arg1 = self._get_args(i+1, default=0)
-                    arg2 = self._get_args(i+2, default=0)
+            elif arg == 38 or arg == 48:
+                # >>> FIX 23 extended colors: 38/48;5;n (xterm 256) and 38/48;2;r;g;b (true color).  The original took
+                #     three parameters whatever they were, so `38;2;r;g;b` ended at `r` and the g and b were read as
+                #     colors of their own: a program that draws in true color (claude's logo) came out uncolored.
+                #     This session sets COLORTERM=truecolor, inherited from the parent terminal, so programs use it.
+                mode = self._get_args(i+1, default=0)
+                if mode == 5 and i + 2 < len(self._args):
+                    n = self._get_args(i+2, default=0)
                     i += 3
-                    if arg == 38 and arg1 == 5 and 0 <= arg2 <= 255:
-                        # xterm 256 colors
-                        color = colors256[arg2]
-
-                    elif arg == 48 and arg1 == 5 and 0 <= arg2 <= 255:
-                        # xterm 256 colors
-                        bg_color = colors256[arg2]
-                    continue
+                    if 0 <= n <= 255:
+                        if arg == 38:
+                            color = colors256[n]
+                        else:
+                            bg_color = colors256[n]
+                elif mode == 2 and i + 4 < len(self._args):
+                    r, g, b = (min(max(self._get_args(i+k, default=0), 0), 255) for k in (2, 3, 4))
+                    i += 5
+                    if arg == 38:
+                        color = QColor(r, g, b)
+                    else:
+                        bg_color = QColor(r, g, b)
                 else:
                     break
+                continue
+                # <<< END FIX 23
+
+            else:
+                i += 1          # a parameter we do not know (italic, strike, ...): skip just that one
 
         self.set_style_cb(color, bg_color, bold, underline, reverse)
 
@@ -1037,16 +1052,16 @@ class TerminalBuffer:
                 cursor = pos
         return rows, flags, cursor, pending
 
-    def _crop(self, buffer, cursor, pending, row_len):
-        """The alternate screen: no re-flow, each row is cut or padded to the new width -> (rows, flags, cursor, pending)."""
+    def _crop(self, buffer, cursor, row_len):
+        """The alternate screen: no re-flow, each row is cut or padded to the new width -> (rows, flags, cursor).
+        An owed wrap is not kept: the program repaints on SIGWINCH and every cursor move cancels it."""
         rows = deque()
         for row in buffer:
             new = list(row[:row_len]) + [None for _ in range(row_len - len(row))]
             if new[-1] is not None and new[-1].char_width > 1:      # half a wide character
                 new[-1] = None
             rows.append(new)
-        x = min(cursor.x, row_len - 1)
-        return rows, deque(False for r in rows), Position(x, cursor.y), pending and x == cursor.x
+        return rows, deque(False for r in rows), Position(min(cursor.x, row_len - 1), cursor.y)
 
     def _fit(self, rows, flags, cursor, row_len, col_len):
         """A screen with a row for every screen row (fix 9) and at most maximum_line_history rows -> (rows, flags, cursor)."""
@@ -1068,13 +1083,14 @@ class TerminalBuffer:
         self._buffer_lock.lock()
         old_row_len = self.row_len
         self.col_len = col_len
-        saved = self._alt_buffer is not None        # the alternate screen is on: _alt_* is the normal screen behind it
+        alt_on = self._alt_buffer is not None       # a full-screen program is running: _buffer is ITS screen, and
+                                                    # _alt_* holds the regular screen it is hiding (see toggle_alt_screen)
 
         if old_row_len == row_len:
             # only the height changed: no re-flow, just the rows the taller screen needs
             self._pad_rows(self._buffer, self._line_wrapped_flags, row_len, col_len)
             self._buffer_display_offset = self._offset_showing_content()
-            if saved:
+            if alt_on:
                 self._pad_rows(self._alt_buffer, self._alt_line_wrapped_flags, row_len, col_len)
                 self._alt_buffer_display_offset = self._offset_showing_content(self._alt_buffer, self._alt_cursor_position)
             self.update_scroll_position()
@@ -1083,25 +1099,33 @@ class TerminalBuffer:
             return
 
         self.logger.info(f"screen: resize triggered, new size ({row_len}x{col_len})")
-        if saved:
-            rows, flags, cursor, pending = self._crop(self._buffer, self._cursor_position, self._wrap_pending, row_len)
-            s_rows, s_flags, s_cursor, _ = self._layout(*self._logical_lines(
+        if alt_on:
+            # --- the full-screen program's screen (vim, less): cropped, not re-flowed; the program redraws on SIGWINCH
+            rows, flags, cursor = self._crop(self._buffer, self._cursor_position, row_len)
+            rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
+            self._buffer, self._line_wrapped_flags = rows, flags
+            self._cursor_position = cursor
+            self._buffer_display_offset = self._offset_showing_content()
+
+            # --- the regular screen it is hiding (the shell's text, saved by toggle_alt_screen): re-flowed, with its
+            #     saved cursor, so that it comes back at the right width when the program exits
+            rows, flags, cursor, _ = self._layout(*self._logical_lines(
                 self._alt_buffer, self._alt_line_wrapped_flags, self._alt_cursor_position, False), row_len)
-            s_rows, s_flags, s_cursor = self._fit(s_rows, s_flags, s_cursor, row_len, col_len)
-            self._alt_buffer, self._alt_line_wrapped_flags = s_rows, s_flags
-            self._alt_cursor_position = s_cursor
-            self._alt_buffer_display_offset = self._offset_showing_content(s_rows, s_cursor)
+            rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
+            self._alt_buffer, self._alt_line_wrapped_flags = rows, flags
+            self._alt_cursor_position = cursor
+            self._alt_buffer_display_offset = self._offset_showing_content(rows, cursor)
         else:
+            # --- the regular screen (tcsh): re-flowed
             rows, flags, cursor, pending = self._layout(*self._logical_lines(
                 self._buffer, self._line_wrapped_flags, self._cursor_position, self._wrap_pending), row_len)
-        rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
+            rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
+            self._buffer, self._line_wrapped_flags = rows, flags
+            self._cursor_position = cursor
+            self._wrap_pending = pending        # after the position: assigning it clears the flag
+            self._buffer_display_offset = self._offset_showing_content()
 
         self.row_len = row_len
-        self._buffer = rows
-        self._line_wrapped_flags = flags
-        self._cursor_position = cursor
-        self._wrap_pending = pending            # after the position: assigning it clears the flag
-        self._buffer_display_offset = self._offset_showing_content()
         self.update_scroll_position()
         self.reset_selection()                  # its cells moved: the selection would point at other text
 
