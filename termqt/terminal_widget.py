@@ -154,6 +154,52 @@ class Terminal(TerminalBuffer, QWidget):
             self._paint_buffer()
             self._restore_cursor_state()
 
+    # characters (besides letters and digits) that belong to a word for a double click: so that paths, options and
+    # host:port come out whole, as in other terminals
+    WORD_CHARS = '_-./~:@%+=,#'
+
+    def _word_range(self, pos):
+        """(first col, last col) of the word at `pos` (a cell), or None when it is on a space."""
+        row = self._buffer[pos.y]
+
+        def is_word(c):
+            cell = row[c]
+            ch = cell.char if cell else ''
+            return bool(ch) and (ch.isalnum() or ch in self.WORD_CHARS) and not ch.isspace()
+
+        def is_filler(c):                              # the right half of a wide character
+            return bool(row[c]) and not row[c].char
+
+        if not is_word(pos.x):
+            return None
+        first = last = pos.x
+        while first > 0 and (is_word(first - 1) or is_filler(first - 1)):
+            first -= 1
+        while last + 1 < len(row) and (is_word(last + 1) or is_filler(last + 1)):
+            last += 1
+        while last > pos.x and is_filler(last):
+            last -= 1
+        return first, last
+
+    def mouseDoubleClickEvent(self, event):
+        """Double click: select the word under the pointer (it goes to PRIMARY when the button is released)."""
+        if event.button() != Qt.LeftButton:
+            return
+        pos = self._align_to_rightmost_char(self._map_pixel_to_cell(event.pos()))
+        if pos.y >= len(self._buffer) or pos.x >= len(self._buffer[pos.y]):
+            return
+        rng = self._word_range(pos)
+        if rng is None:
+            return
+        self._selection_start = Position(rng[0], pos.y)
+        self._selection_end = Position(rng[1], pos.y)
+        self._paint_buffer()
+        self._restore_cursor_state()
+
+    def focusNextPrevChild(self, next_):
+        # Tab and Shift+Tab belong to the shell (completion), not to Qt's focus change
+        return False
+
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
             if self._selection_start is not None:
@@ -683,6 +729,10 @@ class Terminal(TerminalBuffer, QWidget):
 
         self.reset_selection()
 
+        if key == Qt.Key_Backtab:                      # Shift+Tab
+            self.input(b'\x1b[Z')
+            return
+
         while True:
             # This is a one-shot loop, because I want to use 'break'
             # to jump out of this block
@@ -706,6 +756,8 @@ class Terminal(TerminalBuffer, QWidget):
                     self.input(ControlChar.CR.value)
                 elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
                     self.input(ControlChar.BS.value)
+                elif key == Qt.Key_Tab:
+                    self.input(ControlChar.TAB.value)
                 elif key == Qt.Key_Escape:
                     self.input(ControlChar.ESC.value)
                 else:
