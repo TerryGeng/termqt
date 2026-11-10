@@ -152,7 +152,7 @@ class TerminalPOSIXIO(TerminalIO, ABC):
             os.kill(self.pid, signal.SIGTERM)
 
             def _check_killed():
-                time.sleep(3000)
+                time.sleep(3)       # FIX 14: was time.sleep(3000), i.e. 50 minutes before the SIGKILL
                 if self.is_alive():
                     os.kill(self.pid, signal.SIGKILL)
 
@@ -161,7 +161,7 @@ class TerminalPOSIXIO(TerminalIO, ABC):
 
     def is_alive(self):
         try:
-            os.kill(self.pif, 0)
+            os.kill(self.pid, 0)    # FIX 13: was self.pif (typo)
             return True
         except OSError:
             self.running = False
@@ -169,22 +169,35 @@ class TerminalPOSIXIO(TerminalIO, ABC):
 
 
 class TerminalPOSIXExecIO(TerminalPOSIXIO):
-    def __init__(self, cols: int, rows: int, cmd: str, env=None, logger=None):
+    def __init__(self, cols: int, rows: int, cmd: str, env=None, logger=None, cwd=None):
         # Initilize.
         #
         # args: cols: columns
         #       rows: rows
         #       cmd: the command to execute.
         #       env: environment variables, if None, set it to os.environ
+        #       cwd: the directory to start the command in (FIX 19), None = where this process is
         super().__init__(cols, rows, logger)
         self.cmd = cmd
         self.env = env if env else os.environ
+        self.cwd = cwd      # FIX 19
 
     def run_slave(self):
         import shlex
         cmd = shlex.split(self.cmd)
 
         env = self.env
+        # >>> FIX 19 start the command in a directory.  A shell asked to `cd` after it started gets the typed line
+        #     echoed by the pty before it is ready.  Like a shell does for itself, PWD is set to the path as given
+        #     (os.chdir does not touch it), so tcsh shows that path and not the resolved one.  A directory that
+        #     cannot be entered is ignored: the command starts where this process is.
+        if self.cwd:
+            try:
+                os.chdir(self.cwd)
+                env["PWD"] = self.cwd if os.path.isabs(self.cwd) else os.getcwd()
+            except OSError:
+                pass
+        # <<< END FIX 19
         env["COLUMNS"] = str(self.cols)
         env["LINES"] = str(self.rows)
         env["TERM"] = env.get("TERM", "xterm-256color")

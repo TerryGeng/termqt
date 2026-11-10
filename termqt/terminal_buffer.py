@@ -40,7 +40,8 @@ class ControlChar(Enum):
     SYN = 22  # Ctrl-V
     ETB = 23  # Ctrl-W, end of xmit block, bash shortcut for cut the word before cursor
     CAN = 24  # Ctrl-X, cancel
-    EM = 25,  # Ctrl-Y, end of medium, bash shortcut for paste
+    # FIX 12 (one line): was `EM = 25,` -- the trailing comma made the value a tuple (25,), so Ctrl+Y sent nothing
+    EM =  25  # Ctrl-Y, end of medium, bash shortcut for paste
     SUB = 26  # Ctrl-Z, substitute
     ESC = 27  # Ctrl-[, escape
 
@@ -146,9 +147,17 @@ class EscapeProcessor:
         self._cmd = ""
         self._mark = ""
         self._buffer = ""
+        # >>> FIX 15 (1/5) default colors: what a reset (ESC[0m, ESC[39m, ESC[49m) returns to.  The original always
+        #     returned to Qt.white / Qt.black, ignoring the colors the application chose with set_fg / set_bg, so
+        #     all text after the first reset was drawn in other colors than the text before it.
+        #     TerminalBuffer.set_fg / set_bg keep these two up to date.
+        self.default_fg = DEFAULT_FG_COLOR
+        self.default_bg = DEFAULT_BG_COLOR
+        # <<< END FIX 15 (1/5)
 
         self._esc_func = {
             'M': self._esc_m,
+            '\\': lambda: None,       # ST, the end of an OSC string (FIX 24)
         }
 
         self._csi_func = {
@@ -354,17 +363,14 @@ class EscapeProcessor:
             self.fail()
 
         # === OSC ===
-        elif self._state == self.State.OSC_WAIT_FOR_NEXT_ARG:
-            if 20 <= c <= 126 and c != 59:  # every visible thing except ;
+        elif self._state == self.State.OSC_WAIT_FOR_NEXT_ARG or self._state == self.State.OSC_WAIT_FOR_ARG_FINISH:
+            # >>> FIX 24 OSC text: any character (not only ASCII 20..126, which was also a typo for 32) can be in a
+            #     title; claude sets "<spinner glyph> Claude Code", the glyph failed the sequence and the rest of the
+            #     title was printed on the screen.  An empty argument is allowed (ESC ] 0 ; BEL), and the ST that
+            #     ends a sequence, ESC \, is taken whole (see _esc_func).
+            if c >= 32 and c != 59 and c != 127:
                 self._arg_buf += chr(c)
                 self._enter_state(self.State.OSC_WAIT_FOR_ARG_FINISH)
-                return 1
-            else:
-                self.fail()
-
-        elif self._state == self.State.OSC_WAIT_FOR_ARG_FINISH:
-            if 20 <= c <= 126 and c != 59:  # every visible thing except ;
-                self._arg_buf += chr(c)
                 return 1
             elif c == 59:  # ord(';')
                 self._args.append(self._arg_buf)
@@ -374,9 +380,12 @@ class EscapeProcessor:
             elif c == 7 or c == 27:  # BEL, \x07 or ESC, \x1b
                 self._args.append(self._arg_buf)
                 self._enter_state(self.State.OSC_COMPLETE)
+                if c == 27:
+                    self._state = self.State.WAIT_FOR_BRAC_OR_CHAR      # the backslash of ST comes next
                 return 1
             else:
                 self.fail()
+            # <<< END FIX 24
 
         elif self._state == self.State.OSC_COMPLETE:
             # this branch should never be reached
@@ -446,7 +455,8 @@ class EscapeProcessor:
         try:
             op = int(self._args[0])
             if op in [0, 1, 2]:
-                text = self._args[1]
+                # the processor is fed bytes, so a non-ASCII title is still its UTF-8 bytes here: decode it
+                text = ';'.join(self._args[1:]).encode('latin-1', 'replace').decode('utf-8', 'replace')
                 self.set_window_title_cb(text)
         except (ValueError, IndexError):
             self.fail()
@@ -544,8 +554,8 @@ class EscapeProcessor:
 
         if len(self._args) == 0:
             bold, underline, reverse = 0, 0, 0
-            color = DEFAULT_FG_COLOR
-            bg_color = DEFAULT_BG_COLOR
+            color = self.default_fg         # FIX 15 (2/5): was DEFAULT_FG_COLOR
+            bg_color = self.default_bg      # FIX 15 (2/5): was DEFAULT_BG_COLOR
 
         while i < len(self._args):
             arg = self._get_args(i, default=0)
@@ -553,8 +563,8 @@ class EscapeProcessor:
                 i += 1
                 if arg == 0:
                     bold, underline, reverse = 0, 0, 0
-                    color = DEFAULT_FG_COLOR
-                    bg_color = DEFAULT_BG_COLOR
+                    color = self.default_fg         # FIX 15 (2/5): was DEFAULT_FG_COLOR
+                    bg_color = self.default_bg      # FIX 15 (2/5): was DEFAULT_BG_COLOR
                 elif arg == 1:
                     bold = 1
                 elif arg == 4:
@@ -571,58 +581,61 @@ class EscapeProcessor:
 
             elif 30 <= arg <= 37 or 40 <= arg <= 47 or \
                     90 <= arg <= 97 or 100 <= arg <= 107:
-                if arg >= 90:
+                # >>> FIX 18 colors 30-37 / 40-47 / 90-97 / 100-107: each is one parameter.  The original looked at
+                #     the NEXT parameter after a 30-37 / 40-47 color and, if it was 0 or 1, swallowed it as "normal /
+                #     bright" (so `31;1` gave bright red and no bold, `31;0` ignored the reset), and if it was anything
+                #     else it dropped the color (`31;47` and `31;4` lost the red).  Now a color is just a color and
+                #     the next parameter is handled on its own; 90-97 / 100-107 are the bright ones.
+                i += 1
+                bright = arg >= 90
+                if bright:
                     arg -= 60
-                    arg1 = 1
-                    i += 1
-                else:
-                    if i + 1 < len(self._args):
-                        arg1 = self._get_args(i+1, default=0)
-                    else:
-                        arg1 = 0
-
-                    if arg1 == 0 or arg1 == 1:
-                        i += 2
-                    else:
-                        i += 1
-
+                palette = colors16 if bright else colors8
                 if arg <= 37:
-                    if arg1 == 0:  # foreground 8 colors
-                        color = colors8[arg]
-                    elif arg1 == 1:  # foreground 16 colors
-                        color = colors16[arg]
-                elif 40 <= arg < 50:
-                    if arg1 == 0:  # background 8 colors
-                        bg_color = colors8[arg - 10]
-                    elif arg1 == 1:  # background 16 colors
-                        bg_color = colors16[arg - 10]
+                    color = palette[arg]            # foreground
+                else:
+                    bg_color = palette[arg - 10]    # background
                 continue
+                # <<< END FIX 18
 
             elif arg == 39:
                 i += 1
-                color = DEFAULT_FG_COLOR
+                color = self.default_fg             # FIX 15 (2/5): was DEFAULT_FG_COLOR
                 continue
 
             elif arg == 49:
                 i += 1
-                bg_color = DEFAULT_BG_COLOR
+                bg_color = self.default_bg          # FIX 15 (2/5): was DEFAULT_BG_COLOR
                 continue
 
-            else:
-                if i + 2 < len(self._args):  # need two consecuted args
-                    arg1 = self._get_args(i+1, default=0)
-                    arg2 = self._get_args(i+2, default=0)
+            elif arg == 38 or arg == 48:
+                # >>> FIX 23 extended colors: 38/48;5;n (xterm 256) and 38/48;2;r;g;b (true color).  The original took
+                #     three parameters whatever they were, so `38;2;r;g;b` ended at `r` and the g and b were read as
+                #     colors of their own: a program that draws in true color (claude's logo) came out uncolored.
+                #     This session sets COLORTERM=truecolor, inherited from the parent terminal, so programs use it.
+                mode = self._get_args(i+1, default=0)
+                if mode == 5 and i + 2 < len(self._args):
+                    n = self._get_args(i+2, default=0)
                     i += 3
-                    if arg == 38 and arg1 == 5 and 0 <= arg2 <= 255:
-                        # xterm 256 colors
-                        color = colors256[arg2]
-
-                    elif arg == 48 and arg1 == 5 and 0 <= arg2 <= 255:
-                        # xterm 256 colors
-                        bg_color = colors256[arg2]
-                    continue
+                    if 0 <= n <= 255:
+                        if arg == 38:
+                            color = colors256[n]
+                        else:
+                            bg_color = colors256[n]
+                elif mode == 2 and i + 4 < len(self._args):
+                    r, g, b = (min(max(self._get_args(i+k, default=0), 0), 255) for k in (2, 3, 4))
+                    i += 5
+                    if arg == 38:
+                        color = QColor(r, g, b)
+                    else:
+                        bg_color = QColor(r, g, b)
                 else:
                     break
+                continue
+                # <<< END FIX 23
+
+            else:
+                i += 1          # a parameter we do not know (italic, strike, ...): skip just that one
 
         self.set_style_cb(color, bg_color, bold, underline, reverse)
 
@@ -641,6 +654,26 @@ class EscapeProcessor:
 
 
 class TerminalBuffer:
+    # >>> FIX 1 (1/3) deferred wrap: the flag and the property that clears it.
+    #     Fixes a long prompt overwriting its own first row (the cursor was clamped to the last
+    #     column and the owed wrap forgotten).  Other parts: write() twice, below.
+    # Deferred wrap (VT100 "last column flag").  A write that fills the last
+    # column does not move the cursor to the next row: the cursor stays on the
+    # last column and a wrap is *owed*; the next printable character pays it
+    # (write() starts that character at row_len, so its wrap logic fires).
+    # Anything that moves the cursor cancels the debt -- the setter below.
+    _wrap_pending = False
+
+    @property
+    def _cursor_position(self):
+        return self._cursor_pos
+
+    @_cursor_position.setter
+    def _cursor_position(self, pos):
+        self._cursor_pos = pos
+        self._wrap_pending = False
+    # <<< END FIX 1 (1/3)
+
     def __init__(self,
                  row_len,
                  col_len,
@@ -685,6 +718,10 @@ class TerminalBuffer:
 
         self._bg_color = DEFAULT_BG_COLOR
         self._fg_color = DEFAULT_FG_COLOR
+        # >>> FIX 15 (3/5) default colors: the colors a reset returns to (set_fg / set_bg change them)
+        self._default_bg = DEFAULT_BG_COLOR
+        self._default_fg = DEFAULT_FG_COLOR
+        # <<< END FIX 15 (3/5)
 
         # initialize alternative screen buffer, which is a xterm feature.
         # when activating alternative buffer, normal buffer will be saved in
@@ -743,8 +780,11 @@ class TerminalBuffer:
     def get_selection(self):
         # Ensure the selection is ordered correctly
         if self._selection_start and self._selection_end:
-            start = min(self._selection_start, self._selection_end)
-            end = max(self._selection_start, self._selection_end)
+            # >>> FIX 17 selection order: by row first, then column.  Position is (x, y), so min / max compared the
+            #     column first: with the end on another row and a smaller column than the start (dragging down-left
+            #     or up-right) the "start" came out below the "end" and the copied text was empty.
+            start, end = sorted((self._selection_start, self._selection_end), key=lambda p: (p.y, p.x))
+            # <<< END FIX 17
             return start, end
         return None, None
 
@@ -788,7 +828,12 @@ class TerminalBuffer:
                             line_text += line[col].char if line[col] else ' '
                         elif start.y < row < end.y:
                             line_text += line[col].char if line[col] else ' '
-                    selected_text += line_text.rstrip() + '\n'
+                    # >>> FIX 6 (1/2) copy: join soft-wrapped rows (the original always ended a row with a newline)
+                    if row < end.y and self._line_wrapped_flags[row]:
+                        selected_text += line_text      # soft-wrapped: the line goes on in the next row
+                    else:
+                        selected_text += line_text.rstrip() + '\n'
+                    # <<< END FIX 6 (1/2)
             return selected_text.strip('\n')
         return ""
 
@@ -801,9 +846,18 @@ class TerminalBuffer:
 
     def _get_all_text_rstrip(self):
         all_text = []
-        for row in self._buffer:
-            line_text = ''.join(c.char if c else ' ' for c in row).rstrip()
-            all_text.append(line_text)
+        # >>> FIX 6 (2/2) copy all: same, join soft-wrapped rows
+        joined = ''
+        for y, row in enumerate(self._buffer):
+            line_text = ''.join(c.char if c else ' ' for c in row)
+            if self._line_wrapped_flags[y]:
+                joined += line_text         # soft-wrapped: the line goes on in the next row
+            else:
+                all_text.append((joined + line_text).rstrip())
+                joined = ''
+        if joined:
+            all_text.append(joined.rstrip())
+        # <<< END FIX 6 (2/2)
 
         # Remove empty lines at the end of the buffer
         while all_text and not all_text[-1]:
@@ -830,11 +884,18 @@ class TerminalBuffer:
         ep.enable_auto_wrap = self.enable_auto_wrap
         ep.insert_space_cb = self.insert_space
 
+    # >>> FIX 15 (4/5) default colors: set_bg / set_fg set the application's colors, so they are also what
+    #     a reset returns to (here and in the escape processor), not the library's white on black
     def set_bg(self, color: QColor):
         self._bg_color = color
+        self._default_bg = color
+        self.escape_processor.default_bg = color
 
     def set_fg(self, color: QColor):
         self._fg_color = color
+        self._default_fg = color
+        self.escape_processor.default_fg = color
+    # <<< END FIX 15 (4/5)
 
     def set_style(self, color, bg_color, bold, underline, reverse):
         self._fg_color = color if color else self._fg_color
@@ -872,12 +933,165 @@ class TerminalBuffer:
         self._line_wrapped_flags = _new_wrap
         self._cursor_position = Position(0, 0)
 
+    # >>> FIX 20 keep the content in view when the window gets shorter.  After a resize the original always showed
+    #     the LAST rows of the buffer.  The buffer has blank rows below the content (the screen is always filled with
+    #     rows, fix 9), so a fresh terminal made shorter showed only those blank rows, with the prompt scrolled out
+    #     of view above them: a tab split in two, whose panes are half as tall, looked empty.  Now the view ends at
+    #     the last row that matters (the cursor, or the last row with text), and starts at the top when the content
+    #     fits.  (buffer / cursor: the saved normal screen of the alternate screen is measured the same way.)
+    def _offset_showing_content(self, buffer=None, cursor=None):
+        buffer = self._buffer if buffer is None else buffer
+        cursor = self._cursor_position if cursor is None else cursor
+        last = cursor.y
+        for y in range(len(buffer) - 1, last, -1):
+            if any(buffer[y]):
+                last = y
+                break
+        return max(0, min(len(buffer) - self.col_len, last - self.col_len + 1))
+    # <<< END FIX 20
+
+    # >>> FIX 22 resize rewritten as two phases.  The original poured the old rows into new rows cell by cell and
+    #     kept the cursor right with counters (soft breaks before it, a "breaked" flag, "empty_ahead", a filler);
+    #     fixes 4, 10, 16 and 21 were patches on that.  Now:
+    #       1. _logical_lines: the rows joined by soft wraps into logical lines (the lines as the shell wrote them),
+    #          with the cursor as (line, offset in the line);
+    #       2. _layout: each line is cut into rows of the new width, and the cursor is found while placing.
+    #     The cursor is then just a coordinate carried through both phases.  The alternate screen is not re-flowed
+    #     (a full-screen program redraws itself on SIGWINCH): it is cropped or padded, and the NORMAL screen saved
+    #     behind it is re-flowed, which the original never did (it came back at the old width).
+
+    def _pad_rows(self, buffer, flags, row_len, col_len):
+        # FIX 9 (kept by the rewrite): the buffer always has a row for every screen row
+        while len(buffer) < col_len:
+            buffer.append([None for _ in range(row_len)])
+            flags.append(False)
+
+    def _logical_lines(self, buffer, flags, cursor, pending):
+        """Phase 1: -> (lines, cursor_line, cursor_offset).  A line is a list of cells, the rows joined by soft wraps,
+        LEAD padding dropped, the never-written cells at its end dropped.  The offset counts the cells before the
+        cursor; an owed wrap (pending) puts the cursor one cell after the last one.  A cursor in the never-written
+        part of a line is put right after the text (a program that places the cursor there redraws on resize).
+        (LEAD padding only ever sits at the end of a row, so it is cut off the end, not searched for.)"""
+        LEAD = Placeholder.LEAD
+        lines, cells = [], []
+        cur_line = cur_off = None
+        for y, (row, wrapped) in enumerate(zip(buffer, flags)):
+            n = len(row)
+            while n and row[n - 1] is not None and row[n - 1].placeholder == LEAD:
+                n -= 1
+            if y == cursor.y:
+                cur_line, cur_off = len(lines), len(cells) + min(cursor.x, n) + (1 if pending else 0)
+            if not wrapped:                         # the end of a line: its never-written cells are not text
+                while n and row[n - 1] is None:
+                    n -= 1
+            cells.extend(row[:n])
+            if not wrapped:
+                while cells and cells[-1] is None:
+                    cells.pop()
+                lines.append(cells)
+                cells = []
+        if cells:                       # the last row is flagged as wrapped (it should not be): keep its cells
+            lines.append(cells)
+        if not lines:
+            lines.append([])
+        if cur_line is None:            # a cursor below the last row: on the last line, at its end
+            cur_line, cur_off = len(lines) - 1, len(lines[-1])
+        return lines, cur_line, min(cur_off, len(lines[cur_line]))
+
+    def _layout(self, lines, cur_line, cur_off, row_len):
+        """Phase 2: cut the lines into rows of row_len -> (rows, flags, cursor, pending).  A row that is full and has
+        more cells after it is flagged as soft-wrapped, and the next cell starts the next row (so a line that ends
+        exactly at the edge gets no empty row after it).  A wide character that does not fit moves to the next row
+        and leaves LEAD padding.  Without auto-wrap, cells beyond the edge pile up on the last column."""
+        wrap = self.auto_wrap_enabled
+        rows, flags = deque(), deque()
+        cursor, pending = Position(0, 0), False
+        for li, cells in enumerate(lines):
+            if wrap and not any(c is not None and c.char_width != 1 for c in cells):
+                # the usual line (no wide characters): cut it with slices
+                count = len(cells)
+                first = len(rows)
+                for i in range(0, max(count, 1), row_len):
+                    chunk = cells[i:i + row_len]
+                    rows.append(chunk + [None for _ in range(row_len - len(chunk))])
+                    flags.append(True)
+                flags[-1] = False
+                if li == cur_line:
+                    if cur_off < count:
+                        r, x = divmod(cur_off, row_len)
+                    else:                                   # after the last cell
+                        r = max(count - 1, 0) // row_len
+                        x = count - r * row_len
+                    cursor = Position(x, first + r)
+                    if x >= row_len:                        # past the edge: the state write() leaves, a wrap is owed
+                        cursor, pending = Position(row_len - 1, first + r), True
+                continue
+            row = [None for _ in range(row_len)]
+            rows.append(row)
+            flags.append(False)
+            x, pos = 0, None
+            for i, c in enumerate(cells):
+                width = min(c.char_width if c is not None else 1, row_len)
+                if wrap and x + width > row_len:
+                    for j in range(x, row_len):
+                        row[j] = Char("", 0, Placeholder.LEAD)
+                    flags[-1] = True
+                    row = [None for _ in range(row_len)]
+                    rows.append(row)
+                    flags.append(False)
+                    x = 0
+                if li == cur_line and i == cur_off:
+                    pos = Position(x, len(rows) - 1)
+                row[min(x, row_len - 1)] = c
+                x += 1
+            if li == cur_line:
+                if pos is None:                         # after the last cell
+                    pos = Position(x, len(rows) - 1)
+                if pos.x >= row_len:                    # past the edge: the state write() leaves, a wrap is owed
+                    pos, pending = Position(row_len - 1, pos.y), wrap
+                cursor = pos
+        return rows, flags, cursor, pending
+
+    def _crop(self, buffer, cursor, row_len):
+        """The alternate screen: no re-flow, each row is cut or padded to the new width -> (rows, flags, cursor).
+        An owed wrap is not kept: the program repaints on SIGWINCH and every cursor move cancels it."""
+        rows = deque()
+        for row in buffer:
+            new = list(row[:row_len]) + [None for _ in range(row_len - len(row))]
+            if new[-1] is not None and new[-1].char_width > 1:      # half a wide character
+                new[-1] = None
+            rows.append(new)
+        return rows, deque(False for r in rows), Position(min(cursor.x, row_len - 1), cursor.y)
+
+    # >>> FIX 25 a window made shorter kept its blank rows: the buffer always has a row for every screen row (fix 9), so
+    #     a terminal of 40 rows with 4 lines of text, made 20 rows high, still had 40 rows and the scroll bar could go
+    #     down through 20 blank ones (a split tab: the top pane could be scrolled far below its text).  A real
+    #     terminal drops the blank rows at the bottom.  Rows after the last one with text or the cursor go, but never
+    #     below one screenful.
+    def _trim_tail(self, buffer, flags, cursor, col_len):
+        keep = cursor.y + 1
+        for y in range(len(buffer) - 1, keep - 1, -1):
+            if any(buffer[y]):
+                keep = y + 1
+                break
+        keep = max(keep, col_len)
+        while len(buffer) > keep:
+            buffer.pop()
+            flags.pop()
+    # <<< END FIX 25
+
+    def _fit(self, rows, flags, cursor, row_len, col_len):
+        """A screen with a row for every screen row (fix 9) and at most maximum_line_history rows -> (rows, flags, cursor)."""
+        self._trim_tail(rows, flags, cursor, col_len)
+        self._pad_rows(rows, flags, row_len, col_len)
+        while len(rows) > self.maximum_line_history:
+            rows.popleft()
+            flags.popleft()
+            cursor = Position(cursor.x, max(cursor.y - 1, 0))
+        return rows, flags, cursor
+
     def resize(self, row_len, col_len):
-        cur_x = self._cursor_position.x
-        cur_y = self._cursor_position.y
-
-        do_auto_wrap = self.auto_wrap_enabled
-
+        row_len, col_len = max(row_len, 1), max(col_len, 1)
         assert col_len <= self.maximum_line_history
 
         if not self._buffer:
@@ -885,151 +1099,61 @@ class TerminalBuffer:
             return
 
         self._buffer_lock.lock()
-
         old_row_len = self.row_len
-        old_buf_col_len = len(self._buffer)
+        self.col_len = col_len
+        alt_on = self._alt_buffer is not None       # a full-screen program is running: _buffer is ITS screen, and
+                                                    # _alt_* holds the regular screen it is hiding (see toggle_alt_screen)
 
         if old_row_len == row_len:
-            self.col_len = col_len
-            self._buffer_display_offset = max(len(self._buffer) - self.col_len, 0)
+            # only the height changed: no re-flow, just the rows the taller screen needs (the blank rows a shorter one
+            # does not, fix 25)
+            self._trim_tail(self._buffer, self._line_wrapped_flags, self._cursor_position, col_len)
+            self._pad_rows(self._buffer, self._line_wrapped_flags, row_len, col_len)
+            self._buffer_display_offset = self._offset_showing_content()
+            if alt_on:
+                self._trim_tail(self._alt_buffer, self._alt_line_wrapped_flags, self._alt_cursor_position, col_len)
+                self._pad_rows(self._alt_buffer, self._alt_line_wrapped_flags, row_len, col_len)
+                self._alt_buffer_display_offset = self._offset_showing_content(self._alt_buffer, self._alt_cursor_position)
             self.update_scroll_position()
-
             self._buffer_lock.unlock()
             self.resize_callback(col_len, row_len)
             return
 
-        old_auto_breaks_before_cursor = 0
-        for i in range(cur_y):
-            if self._line_wrapped_flags[i]:
-                old_auto_breaks_before_cursor += 1
+        self.logger.info(f"screen: resize triggered, new size ({row_len}x{col_len})")
+        if alt_on:
+            # --- the full-screen program's screen (vim, less): cropped, not re-flowed; the program redraws on SIGWINCH
+            rows, flags, cursor = self._crop(self._buffer, self._cursor_position, row_len)
+            rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
+            self._buffer, self._line_wrapped_flags = rows, flags
+            self._cursor_position = cursor
+            self._buffer_display_offset = self._offset_showing_content()
 
-        self.logger.info(f"screen: resize triggered, new size ({row_len}x"
-                         f"{col_len})")
-
-        _new_buffer = deque([[None for x in range(row_len)]])
-        _new_wrap = deque([False])
-
-        new_y = 0
-        new_x = 0
-        new_auto_breaks_before_cursor = 0
-        breaked = False
-
-        # linebreaks SHOULD be insert when:
-        #  1. reaching the end of a not auto-breaked line
-        #  2. an auto-breaked line is about to overflow
-        # SHOULD NOT be inserted when:
-        #  3. reaching the end of an auto-breaked line
-        #  4. one empty line is breaked into two empty lines i.e. breaking
-        #    whitespaces into the next line
-        #
-        # When the new row length is the integer multiple of the length of
-        # the old row, criteria 1 and 2 will be satisfied simultaneously,
-        # we must be careful not to create two linebreaks but only one.
-
-        for y, old_row in enumerate(self._buffer):
-            if y > 0:
-                # if last line was unfinished and was automantically
-                # wrapped into the next line in the old screen, this flag
-                # will be True, which means we don't need to wrap it again
-                if not self._line_wrapped_flags[y-1]:
-                    if not breaked:
-                        # The _breaked_ flag is used to avoid
-                        # breaking the same line twice
-                        # under the case that the new row length is the
-                        # integer multiple of the length of the old row
-                        _new_buffer.append([None for x in range(row_len)])
-                        _new_wrap.append(False)
-                        new_y += 1
-                        new_x = 0
-
-            x = -1
-            while x + 1 < len(old_row):
-                x += 1
-                c = old_row[x]
-
-                # clear _breaked_ flag
-                # note that it should only be set when the new row length
-                # is the integer multiple of the length of the old row
-                # under which we should avoid an extra line break being
-                # inserted
-                breaked = False
-
-                if c and c.placeholder == Placeholder.LEAD:
-                    continue
-
-                width = c.char_width if c else 1
-
-                if new_x + width > row_len:
-                    # char too wide to fit into this row
-                    while new_x < row_len:
-                        _new_buffer[new_y][new_x] = Char("", 0, Placeholder.LEAD)
-                        new_x += 1
-                    x -= 1
-                else:
-                    _new_buffer[new_y][new_x] = c
-                    new_x += 1
-
-                if new_x >= row_len:
-                    if not do_auto_wrap:
-                        new_x = row_len - 1
-                        continue
-
-                    empty_ahead = all(map(lambda c: not c or c.placeholder != Placeholder.NON,
-                                          old_row[x+1:]))
-
-                    if y == old_buf_col_len - 1 and empty_ahead:
-                        # avoid creating extra new lines after last line
-                        break
-
-                    _new_buffer.append([None for x in range(row_len)])
-                    _new_wrap.append(False)
-                    new_y += 1
-                    new_x = 0
-                    breaked = True
-
-                    if empty_ahead and \
-                            not self._line_wrapped_flags[y]:
-                        # avoid wrapping a bunch of spaces into next line
-                        break
-                    else:
-                        # set the flag for a new auto-line wrap.
-                        new_auto_break_y = new_y - 1
-                        _new_wrap[new_auto_break_y] = True
-
-                        if new_auto_break_y < cur_y:
-                            new_auto_breaks_before_cursor += 1
-                            if new_auto_breaks_before_cursor > old_auto_breaks_before_cursor:
-                                cur_y += 1
-
-        cur_y -= max(0, old_auto_breaks_before_cursor - new_auto_breaks_before_cursor)
-
-        filler = old_buf_col_len - len(_new_buffer)
-        if filler > 0:
-            cur_y += filler
-
-        for i in range(filler):
-            _new_buffer.appendleft([None for x in range(row_len)])
-            _new_wrap.appendleft(False)
-
-        while len(self._buffer) > self.maximum_line_history:
-            _new_buffer.popleft()
-            self._line_wrapped_flags.popleft()
-            cur_y -= 1
+            # --- the regular screen it is hiding (the shell's text, saved by toggle_alt_screen): re-flowed, with its
+            #     saved cursor, so that it comes back at the right width when the program exits
+            rows, flags, cursor, _ = self._layout(*self._logical_lines(
+                self._alt_buffer, self._alt_line_wrapped_flags, self._alt_cursor_position, False), row_len)
+            rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
+            self._alt_buffer, self._alt_line_wrapped_flags = rows, flags
+            self._alt_cursor_position = cursor
+            self._alt_buffer_display_offset = self._offset_showing_content(rows, cursor)
+        else:
+            # --- the regular screen (tcsh): re-flowed
+            rows, flags, cursor, pending = self._layout(*self._logical_lines(
+                self._buffer, self._line_wrapped_flags, self._cursor_position, self._wrap_pending), row_len)
+            rows, flags, cursor = self._fit(rows, flags, cursor, row_len, col_len)
+            self._buffer, self._line_wrapped_flags = rows, flags
+            self._cursor_position = cursor
+            self._wrap_pending = pending        # after the position: assigning it clears the flag
+            self._buffer_display_offset = self._offset_showing_content()
 
         self.row_len = row_len
-        self.col_len = col_len
-        self._buffer = _new_buffer
-        self._buffer_display_offset = len(self._buffer) - self.col_len
         self.update_scroll_position()
-
-        self._line_wrapped_flags = _new_wrap
-        # self.logger.info(f"cursor: ({cur_x}, {cur_y})")
-        self._cursor_position = Position(min(cur_x, row_len), cur_y)
+        self.reset_selection()                  # its cells moved: the selection would point at other text
 
         self._buffer_lock.unlock()
 
         self.resize_callback(col_len, row_len)
-        # self._log_buffer()
+    # <<< END FIX 22
 
     def write(self, text, pos: Position = None, set_cursor=False,
               reset_offset=True):
@@ -1044,7 +1168,11 @@ class TerminalBuffer:
 
         if not pos:
             pos = self._cursor_position
-            pos_x = pos.x
+            # >>> FIX 1 (2/3) deferred wrap: honour the owed wrap (was just `pos_x = pos.x`)
+            # an owed wrap: start at the right edge, the first printable
+            # character does not fit there and wraps (a '\n' just moves down)
+            pos_x = row_len if self._wrap_pending else pos.x
+            # <<< END FIX 1 (2/3)
             pos_y = pos.y
         else:
             pos_x = pos.x
@@ -1098,6 +1226,11 @@ class TerminalBuffer:
         if set_cursor:
             # assert pos_x <= row_len
             self._cursor_position = Position(min(pos_x, row_len-1), pos_y)
+            # >>> FIX 1 (3/3) deferred wrap: record the owed wrap when the row got full
+            # the row is full: the cursor waits on the last column, a wrap is owed
+            # (set after the position: assigning the position clears the flag)
+            self._wrap_pending = pos_x == row_len
+            # <<< END FIX 1 (3/3)
 
         if reset_offset:
             self._buffer_display_offset = min(len(self._buffer) - self.col_len,
@@ -1281,8 +1414,8 @@ class TerminalBuffer:
         self._underline = False
         self._reversed = False
 
-        self._fg_color = DEFAULT_FG_COLOR
-        self._bg_color = DEFAULT_BG_COLOR
+        self._fg_color = self._default_fg       # FIX 15 (5/5): was DEFAULT_FG_COLOR
+        self._bg_color = self._default_bg       # FIX 15 (5/5): was DEFAULT_BG_COLOR
 
     def toggle_alt_screen_save_cursor(self, on=True):
         if on:

@@ -2,9 +2,10 @@ import logging
 import math
 from enum import Enum
 
-from qtpy.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication
+from qtpy.QtWidgets import QWidget, QScrollBar, QMenu, QAction, QApplication, QMessageBox   # QMessageBox: FIX 11
 from qtpy.QtGui import (QPainter, QColor, QPalette, QFontDatabase,
-                      QPen, QFont, QFontInfo, QFontMetrics, QPixmap)
+                      QPen, QFont, QFontInfo, QFontMetrics, QPixmap,
+                      QClipboard)   # QClipboard: FIX 5, 7, 8, 11
 from qtpy.QtCore import Qt, QTimer, QMutex, Signal
 
 from .terminal_buffer import Position, TerminalBuffer, DEFAULT_BG_COLOR, \
@@ -42,6 +43,11 @@ class Terminal(TerminalBuffer, QWidget):
 
     # update scroll bar
     update_scroll_sig = Signal()
+
+    # >>> FIX 11 (1/3) paste guard: the on/off switch
+    # ask before pasting text that contains a line break (see _paste)
+    confirm_multiline_paste = True
+    # <<< END FIX 11 (1/3)
 
     def __init__(self,
                  width,
@@ -148,6 +154,52 @@ class Terminal(TerminalBuffer, QWidget):
             self._paint_buffer()
             self._restore_cursor_state()
 
+    # characters (besides letters and digits) that belong to a word for a double click: so that paths, options and
+    # host:port come out whole, as in other terminals
+    WORD_CHARS = '_-./~:@%+=,#'
+
+    def _word_range(self, pos):
+        """(first col, last col) of the word at `pos` (a cell), or None when it is on a space."""
+        row = self._buffer[pos.y]
+
+        def is_word(c):
+            cell = row[c]
+            ch = cell.char if cell else ''
+            return bool(ch) and (ch.isalnum() or ch in self.WORD_CHARS) and not ch.isspace()
+
+        def is_filler(c):                              # the right half of a wide character
+            return bool(row[c]) and not row[c].char
+
+        if not is_word(pos.x):
+            return None
+        first = last = pos.x
+        while first > 0 and (is_word(first - 1) or is_filler(first - 1)):
+            first -= 1
+        while last + 1 < len(row) and (is_word(last + 1) or is_filler(last + 1)):
+            last += 1
+        while last > pos.x and is_filler(last):
+            last -= 1
+        return first, last
+
+    def mouseDoubleClickEvent(self, event):
+        """Double click: select the word under the pointer (it goes to PRIMARY when the button is released)."""
+        if event.button() != Qt.LeftButton:
+            return
+        pos = self._align_to_rightmost_char(self._map_pixel_to_cell(event.pos()))
+        if pos.y >= len(self._buffer) or pos.x >= len(self._buffer[pos.y]):
+            return
+        rng = self._word_range(pos)
+        if rng is None:
+            return
+        self._selection_start = Position(rng[0], pos.y)
+        self._selection_end = Position(rng[1], pos.y)
+        self._paint_buffer()
+        self._restore_cursor_state()
+
+    def focusNextPrevChild(self, next_):
+        # Tab and Shift+Tab belong to the shell (completion), not to Qt's focus change
+        return False
+
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
             if self._selection_start is not None:
@@ -163,6 +215,79 @@ class Terminal(TerminalBuffer, QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.RightButton:
             self._show_context_menu(event.pos())
+        # >>> FIX 5 (1/2) selecting copies to PRIMARY: on releasing the left button
+        elif event.button() == Qt.LeftButton:
+            self._copy_selection_to_primary()
+        # <<< END FIX 5 (1/2)
+        # >>> FIX 7 (1/3) middle button pastes PRIMARY
+        elif event.button() == Qt.MiddleButton:
+            self._paste_primary()
+        # <<< END FIX 7 (1/3)
+
+    # >>> FIX 7 (2/3) middle button pastes PRIMARY: the method
+    def _paste_primary(self):
+        # X11: the middle button pastes the PRIMARY selection (what was last selected)
+        if QApplication.clipboard().supportsSelection():
+            self._paste(QClipboard.Selection)
+
+    # <<< END FIX 7 (2/3)
+
+    # >>> FIX 7 (3/3) _paste: sends clipboard text to the shell as typed keys.  Written for the middle
+    #     button (7); Ctrl+Shift+V (8) uses it too; the guard inside it is FIX 11
+    def _paste(self, mode):
+        text = QApplication.clipboard().text(mode)
+        if not text:
+            return
+        text = text.replace('\r\n', '\n')
+        # >>> FIX 11 (2/3) paste guard: ask first when the text has a line break
+        # The shell cannot tell a paste from typing (no bracketed paste), so every line break runs the
+        # line before it.  Ask first when there is one.
+        if '\n' in text and self.confirm_multiline_paste and not self._confirm_paste(text):
+            return
+        # <<< END FIX 11 (2/3)
+        # a pasted line break is what Enter sends: a carriage return
+        self.input(text.replace('\n', '\r').encode('utf-8'))
+
+    # <<< END FIX 7 (3/3)
+
+    # >>> FIX 11 (3/3) paste guard: the confirmation dialog
+    def _confirm_paste(self, text):
+        """Ask whether to paste text that contains line breaks; True = go ahead.  (Its own method: tests replace it.)"""
+        lines = text.split('\n')
+        if lines[-1] == '':
+            lines.pop()                         # the line break that ends the last line is not another line
+        shown = lines[:5]
+        preview = '\n'.join(l if len(l) <= 70 else l[:67] + '...' for l in shown)
+        if len(lines) > len(shown):
+            preview += '\n... (%d more)' % (len(lines) - len(shown))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Paste")
+        box.setText("Paste %d line%s?  Each line runs as soon as it is pasted." %
+                    (len(lines), '' if len(lines) == 1 else 's'))
+        box.setInformativeText(preview)
+        paste = box.addButton("Paste", QMessageBox.AcceptRole)
+        cancel = box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(cancel)            # a stray Enter must not paste
+        box.exec_()
+        return box.clickedButton() is paste
+
+    # <<< END FIX 11 (3/3)
+
+    # >>> FIX 5 (2/2) selecting copies to PRIMARY: the method
+    def _copy_selection_to_primary(self):
+        # X11: selecting text puts it in the PRIMARY selection (pasted with the
+        # middle button), no copy step.  Not every platform has one.
+        clipboard = QApplication.clipboard()
+        if not clipboard.supportsSelection():
+            return
+        if self._selection_start is None or self._selection_end is None:
+            return                      # just a click, nothing was selected
+        text = self._get_selected_text_rstrip()
+        if text:
+            clipboard.setText(text, QClipboard.Selection)
+
+    # <<< END FIX 5 (2/2)
 
     def _show_context_menu(self, position):
         menu = QMenu(self)
@@ -291,7 +416,7 @@ class Terminal(TerminalBuffer, QWidget):
 
         offset = self._buffer_display_offset
 
-        qp.fillRect(self.rect(), DEFAULT_BG_COLOR)
+        qp.fillRect(self.rect(), self._default_bg)      # FIX 15 (5/5): was DEFAULT_BG_COLOR
 
         in_selection = False
         start_col = start_row = end_col = end_row = None
@@ -393,8 +518,8 @@ class Terminal(TerminalBuffer, QWidget):
         ch = self.char_height
 
         qp = QPainter(self._canvas)
-        fg = DEFAULT_FG_COLOR
-        bg = DEFAULT_BG_COLOR
+        fg = self._default_fg           # FIX 15 (5/5): was DEFAULT_FG_COLOR
+        bg = self._default_bg           # FIX 15 (5/5): was DEFAULT_BG_COLOR
 
         if self._cursor_blinking_state == CursorState.UNFOCUSED:
             outline = QPen(fg)
@@ -516,10 +641,18 @@ class Terminal(TerminalBuffer, QWidget):
     def _switch_cursor_blink(self, state, blink=True):
         self._cursor_blinking_lock.lock()
 
-        if state != CursorState.UNFOCUSED and blink:
-            self._cursor_blinking_timer.start(50)
-        else:
-            self._cursor_blinking_timer.stop()
+        # >>> FIX 3 shutdown traceback: start()/stop() raise RuntimeError once the QTimer's C++ object is gone
+        try:
+            if state != CursorState.UNFOCUSED and blink:
+                self._cursor_blinking_timer.start(50)
+            else:
+                self._cursor_blinking_timer.stop()
+        except RuntimeError:
+            # At shutdown Qt moves the focus while the timer's C++ object is
+            # already deleted; there is nothing left to blink or paint.
+            self._cursor_blinking_lock.unlock()
+            return
+        # <<< END FIX 3
         self._cursor_blinking_state = state
 
         self._cursor_blinking_lock.unlock()
@@ -530,9 +663,15 @@ class Terminal(TerminalBuffer, QWidget):
         self._saved_cursor_state = self._cursor_blinking_state
         self._switch_cursor_blink(CursorState.ON, False)
 
+    # >>> FIX 2 hollow cursor on a focused terminal: the original restored a stale saved state
     def _restore_cursor_state(self):
-        self._cursor_blinking_state = self._saved_cursor_state
+        # The state saved earlier can be stale (the focus may have changed since,
+        # and a saved "unfocused" overrode the focus-in).  The right state is
+        # whether the terminal has focus now.
+        self._cursor_blinking_state = (CursorState.ON if self.hasFocus()
+                                       else CursorState.UNFOCUSED)
         self._switch_cursor_blink(self._cursor_blinking_state, True)
+    # <<< END FIX 2
 
     def stdout(self, string: bytes):
         # Note that this function accepts UTF-8 only (since python use utf-8).
@@ -565,7 +704,34 @@ class Terminal(TerminalBuffer, QWidget):
         key = event.key()
         modifiers = event.modifiers()
         text = event.text()
+
+        # >>> FIX 8 (1/2) Ctrl+Shift+C needs a selection: a lone Ctrl/Shift press used to clear it
+        # Pressing a modifier alone sends nothing to the shell, and must not clear the
+        # selection: the Ctrl and Shift of Ctrl+Shift+C arrive as key presses of their own.
+        if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta, Qt.Key_AltGr):
+            return
+        # <<< END FIX 8 (1/2)
+
+        # >>> FIX 8 (2/2) Ctrl+Shift+C / Ctrl+Shift+V: keyboard copy and paste
+        # Ctrl+Shift+C / Ctrl+Shift+V: copy / paste.  Plain Ctrl+C and Ctrl+V belong to the shell
+        # (interrupt, quote-next-character), so a terminal can't use them.  Before reset_selection:
+        # a key press clears the selection, and there would be nothing left to copy.
+        if modifiers == (Qt.ControlModifier | Qt.ShiftModifier):
+            if key == Qt.Key_C:
+                selected = self._get_selected_text_rstrip()
+                if selected:
+                    QApplication.clipboard().setText(selected)
+                return
+            if key == Qt.Key_V:
+                self._paste(QClipboard.Clipboard)
+                return
+        # <<< END FIX 8 (2/2)
+
         self.reset_selection()
+
+        if key == Qt.Key_Backtab:                      # Shift+Tab
+            self.input(b'\x1b[Z')
+            return
 
         while True:
             # This is a one-shot loop, because I want to use 'break'
@@ -590,6 +756,8 @@ class Terminal(TerminalBuffer, QWidget):
                     self.input(ControlChar.CR.value)
                 elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
                     self.input(ControlChar.BS.value)
+                elif key == Qt.Key_Tab:
+                    self.input(ControlChar.TAB.value)
                 elif key == Qt.Key_Escape:
                     self.input(ControlChar.ESC.value)
                 else:
